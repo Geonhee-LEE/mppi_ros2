@@ -230,13 +230,19 @@ python examples/mppi_all_variants_benchmark.py --trajectory circle --duration 15
 ### 학습 모델 데모
 
 ```bash
-# 전체 학습 파이프라인 (데이터 수집 → 학습 → 평가)
+# Neural Network 학습 파이프라인
 python examples/learned/neural_dynamics_learning_demo.py --all
 
-# 단계별 실행
-python examples/learned/neural_dynamics_learning_demo.py --collect-data --duration 30
-python examples/learned/neural_dynamics_learning_demo.py --train --epochs 100
-python examples/learned/neural_dynamics_learning_demo.py --evaluate
+# Gaussian Process 학습 파이프라인
+python examples/learned/gp_vs_neural_comparison_demo.py --all
+
+# GP vs Neural Network 비교 (전체)
+python examples/learned/gp_vs_neural_comparison_demo.py \
+    --collect-data --train --evaluate
+
+# 데이터 효율성 테스트 (20% 데이터만 사용)
+python examples/learned/gp_vs_neural_comparison_demo.py \
+    --all --data-fraction 0.2
 
 # 다른 궤적으로 평가
 python examples/learned/neural_dynamics_learning_demo.py --evaluate --trajectory figure8

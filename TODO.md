@@ -244,11 +244,28 @@
   * Physics vs Neural vs Residual 3-way 비교
   * 9패널 비교 플롯
 
-- [x] #203 GaussianProcessDynamics 스켈레톤 ✓ 2026-02-07
+- [x] #203 GaussianProcessDynamics 완전 구현 ✓ 2026-02-07
   * models/learned/gaussian_process_dynamics.py
-  * GP 기반 불확실성 정량화 (스켈레톤 구현)
-  * 향후 GPytorch 연동 준비
-  * predict_with_uncertainty() 인터페이스
+  * GPyTorch 기반 GP 학습 완전 구현
+  * 불확실성 정량화 (mean + std)
+  * predict_with_uncertainty() 구현
+  * Exact GP 및 Sparse GP 지원
+
+- [x] #203-1 Gaussian Process 학습 파이프라인 ✓ 2026-02-07
+  * learning/gaussian_process_trainer.py
+  * ExactGPModel (소규모 데이터)
+  * SparseGPModel (대규모 데이터, 유도점)
+  * Multi-output GP (각 출력 차원 독립 학습)
+  * RBF/Matern 커널, ARD 지원
+  * 학습 최적화 및 모델 저장/로드
+
+- [x] #203-2 GP vs Neural Network 비교 데모 ✓ 2026-02-07
+  * examples/learned/gp_vs_neural_comparison_demo.py
+  * 데이터 효율성 비교 (data_fraction 파라미터)
+  * 불확실성 보정 평가 (1σ, 2σ calibration)
+  * 계산 시간 비교
+  * MPPI 제어 성능 비교
+  * 12패널 종합 비교 플롯
 
 ### 학습 모델 테스트
 

@@ -14,7 +14,7 @@ ipython>=8.0.0
 
 # Machine Learning dependencies
 torch>=2.0.0
-# gpytorch>=1.11.0  # For Gaussian Process models (optional)
+gpytorch>=1.11.0  # For Gaussian Process models
 
 # Optional: GPU acceleration
 # cupy-cuda11x>=11.0.0

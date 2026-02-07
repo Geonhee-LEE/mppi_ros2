@@ -713,15 +713,73 @@
   * 성능 벤치마크 결과
   * 참고 논문 목록
 
+#### Phase 4 (학습 모델 고도화) ✓
+
+**Neural Network 학습 파이프라인 (2026-02-07)**
+
+- [x] #202-1 데이터 수집 파이프라인
+  * learning/data_collector.py
+  * DataCollector (에피소드 기반), DynamicsDataset (정규화)
+  * 데이터 저장/로드 (pickle)
+
+- [x] #202-2 Neural Network 트레이너
+  * learning/neural_network_trainer.py
+  * PyTorch MLP (hidden_dims 설정)
+  * Early stopping, LR scheduling
+  * 학습 히스토리 플롯
+
+- [x] #202-3 Neural Dynamics 학습 데모
+  * examples/learned/neural_dynamics_learning_demo.py
+  * Physics vs Neural vs Residual 3-way 비교
+  * 9패널 비교 플롯
+  * 커밋: `b2bc212`
+
+**Gaussian Process 학습 파이프라인 (2026-02-07)**
+
+- [x] #203-1 Gaussian Process 트레이너
+  * learning/gaussian_process_trainer.py
+  * GPyTorch 기반 (Exact GP / Sparse GP)
+  * Multi-output GP (각 출력 차원 독립)
+  * RBF/Matern 커널, ARD 지원
+
+- [x] #203-2 GP vs Neural 비교 데모
+  * examples/learned/gp_vs_neural_comparison_demo.py
+  * 데이터 효율성 비교 (data_fraction)
+  * 불확실성 보정 평가 (1σ, 2σ)
+  * 12패널 종합 비교 플롯
+  * 커밋: `ecfe346`
+
+**온라인 학습 (2026-02-07)**
+
+- [x] #204-1 온라인 학습 파이프라인
+  * learning/online_learner.py
+  * OnlineDataBuffer (순환 버퍼, FIFO)
+  * OnlineLearner (자동 재학습 트리거)
+  * 성능 모니터링 (적응도 추적)
+
+- [x] #204-2 온라인 학습 데모
+  * examples/learned/online_learning_demo.py
+  * Sim-to-Real 도메인 변화 시뮬레이션
+  * 실시간 모델 적응 (fine-tuning)
+  * 적응 성능 추적 플롯
+
+- [x] #204-3 학습 모델 문서화
+  * docs/learned_models/LEARNED_MODELS_GUIDE.md (종합 가이드)
+  * docs/learned_models/ONLINE_LEARNING.md (온라인 학습)
+  * README.md 업데이트 (온라인 학습 예제)
+  * 커밋: (예정)
+
 #### 종합 통계
 
-**총 구현 코드**: ~8,000+ 라인
+**총 구현 코드**: ~10,000+ 라인
 **유닛 테스트**: 43개 (전부 통과 ✅)
 **MPPI 변형**: 9개 (전부 완성 ✅)
 **모델 타입**: 3개 (Kinematic/Dynamic/Learned)
+**학습 모델**: 3개 (Neural/GP/Residual, 전부 완성 ✅)
+**학습 파이프라인**: 3개 (Neural/GP/Online)
 **모델별 비교**: 4개 (Smooth/SVMPC/Spline/SVG)
-**커밋**: 8개 (M3 SOTA 변형)
-**문서**: README, PRD, IMPLEMENTATION_STATUS, TODO
+**커밋**: 11개 (M3 SOTA 변형 + 학습 모델)
+**문서**: README, PRD, IMPLEMENTATION_STATUS, TODO, LEARNED_MODELS_GUIDE, ONLINE_LEARNING
 
 ---
 

@@ -179,6 +179,34 @@ residual_model = ResidualDynamics(
     residual_fn=lambda s, u: neural_model.forward_dynamics(s, u) - kinematic_model.forward_dynamics(s, u)
 )
 controller = MPPIController(residual_model, params)
+
+# 4. 온라인 학습 (실시간 모델 적응)
+from mppi_controller.learning.online_learner import OnlineLearner
+
+# 온라인 학습 관리자 생성
+online_learner = OnlineLearner(
+    model=neural_model,
+    trainer=trainer,
+    buffer_size=1000,
+    min_samples_for_update=100,
+    update_interval=500,  # 500 샘플마다 모델 업데이트
+)
+
+# 제어 루프에서 실시간 데이터 수집 및 학습
+for t in range(num_steps):
+    state = get_state()
+    control = controller.compute_control(state, ref_trajectory)
+
+    apply_control(control)
+    next_state = get_state()
+
+    # 자동으로 데이터 수집 및 모델 업데이트
+    online_learner.add_sample(state, control, next_state, dt)
+
+# 적응 성능 확인
+summary = online_learner.get_performance_summary()
+print(f"모델 업데이트 횟수: {summary['num_updates']}")
+print(f"성능 개선도: {summary['adaptation_improvement']:.2f}%")
 ```
 
 ## 📊 예제 실행
@@ -246,6 +274,9 @@ python examples/learned/gp_vs_neural_comparison_demo.py \
 
 # 다른 궤적으로 평가
 python examples/learned/neural_dynamics_learning_demo.py --evaluate --trajectory figure8
+
+# 온라인 학습 데모 (Sim-to-Real 적응)
+python examples/learned/online_learning_demo.py --duration 60.0 --plot
 ```
 
 ## 🤖 ROS2 통합
@@ -478,10 +509,15 @@ pytest tests/test_stein_variational_mppi.py -v
 
 ## 📚 문서
 
+### 프로젝트 문서
 - [PRD (Product Requirements Document)](docs/mppi/PRD.md)
 - [Implementation Status](docs/mppi/IMPLEMENTATION_STATUS.md)
 - [CLAUDE Development Guide](CLAUDE.md)
 - [TODO List](TODO.md)
+
+### 학습 모델 가이드
+- [학습 모델 종합 가이드](docs/learned_models/LEARNED_MODELS_GUIDE.md)
+- [온라인 학습 가이드](docs/learned_models/ONLINE_LEARNING.md)
 
 ## 🔬 참고 논문
 

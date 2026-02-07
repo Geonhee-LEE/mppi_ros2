@@ -180,6 +180,139 @@ python examples/comparison/svg_mppi_models_comparison.py --trajectory circle --g
 python examples/mppi_all_variants_benchmark.py --trajectory circle --duration 15
 ```
 
+## 🤖 ROS2 통합
+
+### ROS2 빌드 및 실행
+
+```bash
+# ROS2 워크스페이스 생성 (처음만)
+mkdir -p ~/ros2_ws/src
+cd ~/ros2_ws/src
+ln -s ~/mppi_ros2 .
+
+# 빌드
+cd ~/ros2_ws
+colcon build --packages-select mppi_ros2
+
+# 소스
+source install/setup.bash
+```
+
+### 시뮬레이션 실행
+
+```bash
+# 전체 시스템 실행 (RVIZ 포함)
+ros2 launch mppi_ros2 mppi_sim.launch.py
+
+# RVIZ 없이 실행
+ros2 launch mppi_ros2 mppi_sim.launch.py use_rviz:=false
+
+# 다른 컨트롤러 타입 선택
+ros2 launch mppi_ros2 mppi_sim.launch.py controller_type:=svg
+
+# 다른 궤적 타입 선택
+ros2 launch mppi_ros2 mppi_sim.launch.py trajectory_type:=figure8
+
+# 동역학 모델 사용
+ros2 launch mppi_ros2 mppi_sim.launch.py model_type:=dynamic
+```
+
+### 노드 개별 실행
+
+```bash
+# 시뮬레이션 로봇
+ros2 run mppi_ros2 simple_robot_simulator
+
+# MPPI 컨트롤러
+ros2 run mppi_ros2 mppi_controller_node
+
+# 레퍼런스 궤적 퍼블리셔
+ros2 run mppi_ros2 trajectory_publisher
+
+# MPPI 시각화
+ros2 run mppi_ros2 mppi_visualizer_node
+```
+
+### ROS2 토픽
+
+```bash
+# 토픽 목록
+ros2 topic list
+
+# 주요 토픽:
+# - /odom (nav_msgs/Odometry): 로봇 위치 및 속도
+# - /cmd_vel (geometry_msgs/Twist): 제어 명령
+# - /reference_path (nav_msgs/Path): 레퍼런스 경로
+# - /mppi/visualization (visualization_msgs/MarkerArray): RVIZ 시각화
+
+# 토픽 확인
+ros2 topic echo /cmd_vel
+ros2 topic echo /odom
+```
+
+### ROS2 파라미터 조정
+
+```bash
+# 파라미터 목록
+ros2 param list /mppi_controller
+
+# 파라미터 변경
+ros2 param set /mppi_controller lambda_ 2.0
+ros2 param set /mppi_controller K 2048
+
+# 파라미터 저장
+ros2 param dump /mppi_controller > my_params.yaml
+
+# 파라미터 로드
+ros2 run mppi_ros2 mppi_controller_node --ros-args --params-file my_params.yaml
+```
+
+### MPPI 변형 선택
+
+| Controller Type | 설명 | 추천 사용 |
+|----------------|------|----------|
+| `vanilla` | 기본 MPPI | 일반 추적 |
+| `tube` | Tube-MPPI | 외란 환경 |
+| `log` | Log-MPPI | 수치 안정성 |
+| `tsallis` | Tsallis-MPPI | 탐색/집중 조절 |
+| `risk_aware` | Risk-Aware | 안전 중시 |
+| `smooth` | Smooth MPPI | 제어 부드러움 |
+| `svmpc` | SVMPC | 샘플 품질 |
+| `spline` | Spline-MPPI | 메모리 효율 |
+| `svg` | SVG-MPPI | 고정밀 추적 |
+
+### 레퍼런스 궤적 타입
+
+| Trajectory Type | 설명 |
+|-----------------|------|
+| `circle` | 원형 궤적 |
+| `figure8` | 8자 궤적 |
+| `sine` | 사인파 궤적 |
+| `lemniscate` | ∞ 모양 궤적 |
+| `straight` | 직선 궤적 |
+
+### 설정 파일 수정
+
+MPPI 컨트롤러 설정: `configs/mppi_controller.yaml`
+```yaml
+mppi_controller:
+  ros__parameters:
+    controller_type: vanilla
+    N: 30
+    K: 1024
+    lambda_: 1.0
+    # ... 기타 파라미터
+```
+
+궤적 설정: `configs/trajectory.yaml`
+```yaml
+trajectory_publisher:
+  ros__parameters:
+    trajectory_type: circle
+    radius: 5.0
+    frequency: 0.1
+```
+
 ## 📁 프로젝트 구조
 
 ```

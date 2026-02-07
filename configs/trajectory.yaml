@@ -1,0 +1,18 @@
+trajectory_publisher:
+  ros__parameters:
+    # Trajectory type
+    trajectory_type: circle  # circle, figure8, sine, lemniscate, straight
+
+    # Frame
+    frame_id: map
+
+    # Publishing
+    publish_rate: 10.0  # Hz
+    horizon: 30  # N
+    dt: 0.05  # timestep (s)
+
+    # Trajectory-specific parameters
+    radius: 5.0  # Circle/Figure-8 radius (m)
+    frequency: 0.1  # Trajectory frequency (Hz)
+    amplitude: 3.0  # Sine wave amplitude (m)
+    velocity: 1.0  # Straight line velocity (m/s)

@@ -1,0 +1,53 @@
+mppi_controller:
+  ros__parameters:
+    # Model parameters
+    model_type: kinematic  # kinematic, dynamic
+    v_max: 1.0
+    omega_max: 1.0
+
+    # Controller parameters
+    controller_type: vanilla  # vanilla, tube, log, tsallis, risk_aware, smooth, svmpc, spline, svg
+    N: 30  # horizon
+    dt: 0.05  # timestep (s)
+    K: 1024  # samples
+    lambda_: 1.0  # temperature
+    sigma: [0.5, 0.5]  # noise std [v, omega]
+
+    # Cost weights
+    Q: [10.0, 10.0, 1.0]  # state tracking [x, y, theta]
+    R: [0.1, 0.1]  # control effort [v, omega]
+    Qf: [20.0, 20.0, 2.0]  # terminal cost
+
+    # Node parameters
+    control_rate: 10.0  # Hz
+    frame_id: map
+
+    # Variant-specific parameters (optional)
+    # Tube-MPPI
+    tube_enabled: true
+    tube_margin: 0.3
+    K_fb: [[2.0, 0.0, 0.0], [0.0, 2.0, 0.0]]
+
+    # Log-MPPI
+    use_baseline: true
+
+    # Tsallis-MPPI
+    tsallis_q: 1.2
+
+    # Risk-Aware MPPI
+    cvar_alpha: 0.7
+
+    # Smooth MPPI
+    jerk_weight: 1.0
+
+    # SVMPC
+    svgd_num_iterations: 3
+    svgd_step_size: 0.01
+
+    # Spline-MPPI
+    spline_num_knots: 8
+    spline_degree: 3
+
+    # SVG-MPPI
+    svg_num_guide_particles: 32
+    svg_guide_step_size: 0.01

@@ -428,24 +428,29 @@
 
 ## 🚀 ROS2 Integration (P1)
 
-- [ ] #601 ROS2 패키지 구조
+- [x] #601 ROS2 패키지 구조 ✓ 2026-02-07
   * package.xml, setup.py 작성
   * colcon 빌드 설정
-  * launch 파일
+  * launch 파일 (mppi_sim.launch.py)
+  * RVIZ 설정 파일
+  * 파라미터 YAML 파일 (configs/mppi_controller.yaml, configs/trajectory.yaml)
 
-- [ ] #602 ROS2 기본 노드 구현
-  * ros2/mppi_node.py - MPPI ROS2 wrapper
+- [x] #602 ROS2 기본 노드 구현 ✓ 2026-02-07
+  * ros2/mppi_controller_node.py - MPPI ROS2 wrapper
+  * ros2/simple_robot_simulator.py - 시뮬레이션 로봇
+  * ros2/trajectory_publisher.py - 레퍼런스 경로 생성
   * geometry_msgs/Twist 퍼블리시
   * nav_msgs/Odometry 서브스크라이브
   * nav_msgs/Path 레퍼런스 서브스크라이브
-  * 모든 모델 타입 지원 (파라미터로 선택)
+  * 모든 9가지 MPPI 변형 지원 (파라미터로 선택)
+  * kinematic/dynamic 모델 지원
 
-- [ ] #603 RVIZ 시각화 마커
-  * ros2/mppi_rviz_visualizer.py
-  * 샘플 궤적 (MarkerArray, 투명도)
+- [x] #603 RVIZ 시각화 마커 ✓ 2026-02-07
+  * ros2/mppi_visualizer_node.py
+  * 샘플 궤적 (MarkerArray, 가중치 기반 투명도)
   * 가중 평균 궤적 (Path, 시안)
-  * 비용 히트맵 (Marker)
-  * Tube 경계 (Tube-MPPI)
+  * 레퍼런스 경로 시각화
+  * 파라미터 기반 시각화 제어
 
 - [ ] #604 nav2 Controller 플러그인 (Python prototype)
   * nav2 호환 인터페이스

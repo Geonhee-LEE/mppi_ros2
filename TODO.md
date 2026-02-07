@@ -210,43 +210,51 @@
 
 ### 학습 모델 구현
 
-- [ ] #201 ResidualDynamics 모델
+- [x] #201 ResidualDynamics 모델 ✓ 2026-02-07
   * models/learned/residual_dynamics.py
   * f_total(x, u) = f_physics(x, u) + f_learned(x, u)
   * __init__(base_model, residual_fn, uncertainty_fn)
   * model_type = "learned"
   * get_uncertainty(state, control) - GP 불확실성 (선택적)
+  * get_residual_contribution() - 기여도 분석
+  * 통계 추적 (mean, std, num_calls)
 
-- [ ] #202 NeuralDynamics 스켈레톤
+- [x] #202 NeuralDynamics 스켈레톤 ✓ 2026-02-07
   * models/learned/neural_dynamics.py
   * PyTorch 기반 신경망 동역학 (스켈레톤 구현)
   * 향후 학습 파이프라인 연동 준비
 
-- [ ] #203 GaussianProcessDynamics 스켈레톤
+- [x] #203 GaussianProcessDynamics 스켈레톤 ✓ 2026-02-07
   * models/learned/gaussian_process_dynamics.py
   * GP 기반 불확실성 정량화 (스켈레톤 구현)
   * 향후 GPytorch 연동 준비
+  * predict_with_uncertainty() 인터페이스
 
 ### 학습 모델 테스트
 
-- [ ] #204 학습 모델 유닛 테스트
-  * tests/models/test_learned_models.py
-  * ResidualDynamics 동등성 검증 (residual=0)
-  * 더미 residual 효과 검증
+- [x] #204 학습 모델 유닛 테스트 ✓ 2026-02-07
+  * tests/test_residual_dynamics.py (5개 테스트 전부 통과)
+  * ResidualDynamics 동등성 검증 (residual=None)
+  * Constant residual 효과 검증
+  * 배치 처리 검증
+  * 기여도 분석 검증
+  * 통계 추적 검증
 
-- [ ] #205 Residual 동역학 데모
+- [x] #205 Residual 동역학 데모 ✓ 2026-02-07
   * examples/learned/mppi_residual_dynamics_demo.py
-  * 더미 residual_fn으로 RMSE 개선 확인
-  * --live 실시간 시뮬레이션
+  * 더미 residual_fn 타입별 비교 (constant/state/control/none)
+  * Residual 기여도 분석 출력
+  * 통계 추적 출력
 
 ### 모델 비교
 
-- [ ] #206 Physics vs Learned 비교 데모
+- [x] #206 Physics vs Learned 비교 데모 ✓ 2026-02-07
   * examples/comparison/physics_vs_learned_demo.py
   * 기구학, 동역학, Residual 동역학 3-way 비교
   * ASCII 메트릭 비교 테이블
+  * 6패널 비교 플롯 생성
 
-- [ ] #207 모델 타입별 벤치마크 도구
+- [ ] #207 모델 타입별 벤치마크 도구 (Phase 3 후속 작업)
   * examples/comparison/model_type_benchmark.py
   * Kinematic, Dynamic, Learned 동시 비교
   * --trajectory {circle,figure8,sine} 선택
@@ -594,6 +602,22 @@
   * 6패널 비교 플롯 생성
   * 동역학 모델이 위치 추종 성능 우수 (RMSE 0.0961m vs 0.1841m)
   * 커밋: `004139d` - feat: Phase 2 (M2) 완료
+
+#### Phase 3 (M3) - 학습 모델 (Residual Dynamics) ✓
+
+- [x] #201-#203 학습 모델 구현
+  * ResidualDynamics (Physics + Learned 하이브리드)
+  * NeuralDynamics 스켈레톤 (PyTorch 준비)
+  * GaussianProcessDynamics 스켈레톤 (GPytorch 준비)
+
+- [x] #204 학습 모델 유닛 테스트
+  * 5개 테스트 전부 통과 ✓
+  * Residual=None 동등성, 효과, 배치, 기여도, 통계
+
+- [x] #205-#206 데모 및 비교
+  * Residual 동역학 데모 (4가지 residual 타입)
+  * Physics vs Learned 3-way 비교 (Kinematic/Residual/Dynamic)
+  * 커밋: `f34753e` - feat: Phase 3 (M3) 완료
 
 ---
 

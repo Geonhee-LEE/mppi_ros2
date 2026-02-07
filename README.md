@@ -26,7 +26,10 @@
 
 - **Kinematic Model**: 속도 제어 기반 (v, ω)
 - **Dynamic Model**: 가속도 제어, 질량/관성/마찰 고려 (a, α)
-- **Learned Model**: 데이터 기반 residual 동역학
+- **Learned Model**: 데이터 기반 학습 동역학
+  - **Neural Dynamics**: PyTorch MLP 기반 end-to-end 학습
+  - **Gaussian Process**: 불확실성 정량화
+  - **Residual Dynamics**: 물리 모델 + 학습 보정
 
 ### 성능 벤치마크
 
@@ -134,6 +137,50 @@ params = SplineMPPIParams(
 controller = SplineMPPIController(model, params)
 ```
 
+### 학습 모델 사용
+
+```python
+# 1. 데이터 수집 및 학습
+from mppi_controller.learning.data_collector import DataCollector, DynamicsDataset
+from mppi_controller.learning.neural_network_trainer import NeuralNetworkTrainer
+
+# 데이터 수집 (시뮬레이션)
+collector = DataCollector(state_dim=3, control_dim=2)
+# ... 데이터 수집 ...
+collector.save("training_data.pkl")
+
+# 데이터셋 준비
+data = collector.get_data()
+dataset = DynamicsDataset(data, train_ratio=0.8, normalize=True)
+
+# 신경망 학습
+trainer = NeuralNetworkTrainer(state_dim=3, control_dim=2)
+train_inputs, train_targets = dataset.get_train_data()
+val_inputs, val_targets = dataset.get_val_data()
+trainer.train(train_inputs, train_targets, val_inputs, val_targets,
+              dataset.get_normalization_stats(), epochs=100)
+trainer.save_model("my_model.pth")
+
+# 2. 학습된 모델 사용
+from mppi_controller.models.learned.neural_dynamics import NeuralDynamics
+
+neural_model = NeuralDynamics(
+    state_dim=3,
+    control_dim=2,
+    model_path="models/learned_models/my_model.pth"
+)
+controller = MPPIController(neural_model, params)
+
+# 3. Residual Learning (물리 + 학습)
+from mppi_controller.models.learned.residual_dynamics import ResidualDynamics
+
+residual_model = ResidualDynamics(
+    base_model=kinematic_model,  # 물리 모델
+    residual_fn=lambda s, u: neural_model.forward_dynamics(s, u) - kinematic_model.forward_dynamics(s, u)
+)
+controller = MPPIController(residual_model, params)
+```
+
 ## 📊 예제 실행
 
 ### 기본 데모
@@ -178,6 +225,21 @@ python examples/comparison/svg_mppi_models_comparison.py --trajectory circle --g
 ```bash
 # 9개 변형 종합 비교
 python examples/mppi_all_variants_benchmark.py --trajectory circle --duration 15
+```
+
+### 학습 모델 데모
+
+```bash
+# 전체 학습 파이프라인 (데이터 수집 → 학습 → 평가)
+python examples/learned/neural_dynamics_learning_demo.py --all
+
+# 단계별 실행
+python examples/learned/neural_dynamics_learning_demo.py --collect-data --duration 30
+python examples/learned/neural_dynamics_learning_demo.py --train --epochs 100
+python examples/learned/neural_dynamics_learning_demo.py --evaluate
+
+# 다른 궤적으로 평가
+python examples/learned/neural_dynamics_learning_demo.py --evaluate --trajectory figure8
 ```
 
 ## 🤖 ROS2 통합

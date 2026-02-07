@@ -219,10 +219,30 @@
   * get_residual_contribution() - 기여도 분석
   * 통계 추적 (mean, std, num_calls)
 
-- [x] #202 NeuralDynamics 스켈레톤 ✓ 2026-02-07
+- [x] #202 NeuralDynamics 완전 구현 ✓ 2026-02-07
   * models/learned/neural_dynamics.py
-  * PyTorch 기반 신경망 동역학 (스켈레톤 구현)
-  * 향후 학습 파이프라인 연동 준비
+  * PyTorch 기반 신경망 동역학 완전 구현
+  * 학습 파이프라인 연동 완료
+  * 학습된 모델 로드 및 추론 지원
+
+- [x] #202-1 데이터 수집 파이프라인 ✓ 2026-02-07
+  * learning/data_collector.py
+  * DataCollector 클래스 (에피소드 기반 데이터 수집)
+  * DynamicsDataset 클래스 (train/val split, 정규화)
+  * 데이터 저장/로드 (pickle)
+
+- [x] #202-2 Neural Network 학습 파이프라인 ✓ 2026-02-07
+  * learning/neural_network_trainer.py
+  * DynamicsMLPModel (PyTorch MLP)
+  * NeuralNetworkTrainer (학습/평가/저장/로드)
+  * Early stopping, learning rate scheduling
+  * 학습 히스토리 플롯
+
+- [x] #202-3 Neural Dynamics 학습 데모 ✓ 2026-02-07
+  * examples/learned/neural_dynamics_learning_demo.py
+  * 전체 파이프라인: 데이터 수집 → 학습 → 평가
+  * Physics vs Neural vs Residual 3-way 비교
+  * 9패널 비교 플롯
 
 - [x] #203 GaussianProcessDynamics 스켈레톤 ✓ 2026-02-07
   * models/learned/gaussian_process_dynamics.py

@@ -1,17 +1,18 @@
 """
-Neural Network 기반 동역학 모델 (스켈레톤)
+Neural Network 기반 동역학 모델
 
-향후 PyTorch로 신경망 학습 파이프라인 연동 예정.
+PyTorch 학습 모델 통합.
 """
 
 import numpy as np
+import torch
 from mppi_controller.models.base_model import RobotModel
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 
 
 class NeuralDynamics(RobotModel):
     """
-    신경망 기반 동역학 모델 (스켈레톤)
+    신경망 기반 동역학 모델
 
     순수 데이터 기반 동역학 학습:
         dx/dt = NN(x, u; θ)
@@ -26,44 +27,46 @@ class NeuralDynamics(RobotModel):
         - 외삽 불안정
         - 물리 법칙 보장 없음
 
-    향후 구현 계획:
-        - PyTorch MLP/RNN 모델
-        - 학습 데이터 수집 파이프라인
-        - 온라인 학습 (fine-tuning)
-        - Physics-informed NN (PINN)
+    사용 예시:
+        # 학습된 모델 로드
+        neural_model = NeuralDynamics(
+            state_dim=3,
+            control_dim=2,
+            model_path="models/learned_models/best_model.pth"
+        )
+
+        # 추론
+        state_dot = neural_model.forward_dynamics(state, control)
 
     Args:
         state_dim: 상태 벡터 차원
         control_dim: 제어 벡터 차원
-        network_config: 신경망 설정 (hidden_dims, activation 등)
-        model_path: 학습된 모델 경로 (체크포인트)
+        model_path: 학습된 모델 경로 (PyTorch checkpoint)
+        device: 'cpu' or 'cuda'
     """
 
     def __init__(
         self,
         state_dim: int,
         control_dim: int,
-        network_config: Optional[dict] = None,
         model_path: Optional[str] = None,
+        device: str = "cpu",
     ):
         self._state_dim = state_dim
         self._control_dim = control_dim
-        self.network_config = network_config or {
-            "hidden_dims": [64, 64],
-            "activation": "relu",
-        }
+        self.device = torch.device(device)
         self.model_path = model_path
 
-        # TODO: PyTorch 모델 로드
-        # if model_path is not None:
-        #     self.model = torch.load(model_path)
-        # else:
-        #     self.model = self._build_network()
-
-        print(
-            "[NeuralDynamics] Skeleton implementation. "
-            "Full PyTorch integration planned for future."
-        )
+        # Load model if path provided
+        if model_path is not None:
+            self._load_model(model_path)
+        else:
+            self.model = None
+            self.norm_stats = None
+            print(
+                "[NeuralDynamics] No model loaded. "
+                "Call load_model() or use NeuralNetworkTrainer to train."
+            )
 
     @property
     def state_dim(self) -> int:
@@ -90,52 +93,123 @@ class NeuralDynamics(RobotModel):
         Returns:
             state_dot: (nx,) 또는 (batch, nx)
         """
-        # TODO: PyTorch forward pass
-        # with torch.no_grad():
-        #     state_tensor = torch.from_numpy(state).float()
-        #     control_tensor = torch.from_numpy(control).float()
-        #     input_tensor = torch.cat([state_tensor, control_tensor], dim=-1)
-        #     output_tensor = self.model(input_tensor)
-        #     state_dot = output_tensor.numpy()
+        if self.model is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
 
-        # 현재: 더미 구현 (zero dynamics)
-        if state.ndim == 1:
-            return np.zeros(self._state_dim)
+        self.model.eval()
+
+        # Normalize inputs
+        if self.norm_stats is not None:
+            state_norm = (state - self.norm_stats["state_mean"]) / self.norm_stats["state_std"]
+            control_norm = (control - self.norm_stats["control_mean"]) / self.norm_stats["control_std"]
         else:
-            batch_size = state.shape[0]
-            return np.zeros((batch_size, self._state_dim))
+            state_norm = state
+            control_norm = control
 
-    def _build_network(self):
-        """신경망 아키텍처 생성 (TODO)"""
-        # TODO: PyTorch nn.Sequential 또는 커스텀 모델
-        pass
+        # Concatenate [state, control]
+        if state.ndim == 1:
+            inputs = np.concatenate([state_norm, control_norm])
+            inputs_tensor = torch.FloatTensor(inputs).unsqueeze(0).to(self.device)
+        else:
+            inputs = np.concatenate([state_norm, control_norm], axis=1)
+            inputs_tensor = torch.FloatTensor(inputs).to(self.device)
 
-    def train(self, train_data: dict, val_data: dict, epochs: int = 100):
+        # Forward pass
+        with torch.no_grad():
+            outputs_tensor = self.model(inputs_tensor)
+            outputs = outputs_tensor.cpu().numpy()
+
+        # Denormalize outputs
+        if self.norm_stats is not None:
+            outputs = outputs * self.norm_stats["state_dot_std"] + self.norm_stats["state_dot_mean"]
+
+        # Squeeze if single sample
+        if state.ndim == 1:
+            outputs = outputs.squeeze(0)
+
+        return outputs
+
+    def _load_model(self, model_path: str):
         """
-        신경망 학습 (TODO)
+        Load trained model
 
         Args:
-            train_data: {"states": (N, nx), "controls": (N, nu), "next_states": (N, nx)}
-            val_data: 검증 데이터
-            epochs: 에폭 수
+            model_path: Path to PyTorch checkpoint
         """
-        # TODO: PyTorch training loop
-        pass
+        try:
+            # Import here to avoid dependency if not using neural models
+            from mppi_controller.learning.neural_network_trainer import DynamicsMLPModel
 
-    def save(self, path: str):
-        """모델 저장 (TODO)"""
-        # TODO: torch.save(self.model.state_dict(), path)
-        pass
+            checkpoint = torch.load(model_path, map_location=self.device)
 
-    def load(self, path: str):
-        """모델 로드 (TODO)"""
-        # TODO: self.model.load_state_dict(torch.load(path))
-        pass
+            # Extract config
+            config = checkpoint["config"]
+            input_dim = config["state_dim"] + config["control_dim"]
+            output_dim = config["state_dim"]
+            hidden_dims = config["hidden_dims"]
+
+            # Build model
+            self.model = DynamicsMLPModel(
+                input_dim=input_dim,
+                output_dim=output_dim,
+                hidden_dims=hidden_dims,
+            ).to(self.device)
+
+            # Load weights
+            self.model.load_state_dict(checkpoint["model_state_dict"])
+            self.model.eval()
+
+            # Load normalization stats
+            self.norm_stats = checkpoint.get("norm_stats")
+
+            print(f"[NeuralDynamics] Model loaded from {model_path}")
+            print(f"  Input dim: {input_dim} (state={config['state_dim']}, control={config['control_dim']})")
+            print(f"  Hidden dims: {hidden_dims}")
+            num_params = sum(p.numel() for p in self.model.parameters())
+            print(f"  Parameters: {num_params:,}")
+
+        except ImportError:
+            raise ImportError(
+                "PyTorch not installed. Install with: pip install torch"
+            )
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+
+    def load_model(self, model_path: str):
+        """Load model (public method)"""
+        self.model_path = model_path
+        self._load_model(model_path)
+
+    def get_model_info(self) -> Dict:
+        """Get model information"""
+        if self.model is None:
+            return {"loaded": False}
+
+        num_params = sum(p.numel() for p in self.model.parameters())
+        return {
+            "loaded": True,
+            "input_dim": self.model.input_dim,
+            "output_dim": self.model.output_dim,
+            "hidden_dims": self.model.hidden_dims,
+            "num_parameters": num_params,
+            "device": str(self.device),
+            "normalized": self.norm_stats is not None,
+        }
 
     def __repr__(self) -> str:
-        return (
-            f"NeuralDynamics("
-            f"state_dim={self._state_dim}, "
-            f"control_dim={self._control_dim}, "
-            f"config={self.network_config})"
-        )
+        if self.model is not None:
+            num_params = sum(p.numel() for p in self.model.parameters())
+            return (
+                f"NeuralDynamics("
+                f"state_dim={self._state_dim}, "
+                f"control_dim={self._control_dim}, "
+                f"params={num_params:,}, "
+                f"loaded=True)"
+            )
+        else:
+            return (
+                f"NeuralDynamics("
+                f"state_dim={self._state_dim}, "
+                f"control_dim={self._control_dim}, "
+                f"loaded=False)"
+            )

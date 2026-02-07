@@ -1,0 +1,22 @@
+# Core dependencies
+numpy>=1.21.0
+scipy>=1.7.0
+matplotlib>=3.4.0
+dataclasses-json>=0.5.7
+
+# Development dependencies
+pytest>=7.0.0
+pytest-cov>=3.0.0
+black>=22.0.0
+flake8>=4.0.0
+mypy>=0.950
+ipython>=8.0.0
+
+# Optional: GPU acceleration
+# cupy-cuda11x>=11.0.0
+# jax[cuda]>=0.4.0
+
+# Optional: Documentation
+# sphinx>=4.5.0
+# sphinx-rtd-theme>=1.0.0
+# sphinx-autodoc-typehints>=1.18.0

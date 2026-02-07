@@ -184,25 +184,28 @@
 
 ### Tube-MPPI (외란 강건성)
 
-- [ ] #110 AncillaryController 구현
-  * ancillary_controller.py - body frame 피드백
+- [x] #110 AncillaryController 구현 ✓ 2026-02-07
+  * controllers/mppi/tube_mppi.py에 통합
+  * body frame 피드백
   * world → body 오차 변환
   * K_fb 피드백 게인
 
-- [ ] #111 Tube-MPPI 컨트롤러
+- [x] #111 Tube-MPPI 컨트롤러 ✓ 2026-02-07
   * tube_mppi.py - TubeMPPIController
   * MPPIController 상속
   * 명목 상태 전파 + 피드백 보정
   * tube_enabled 플래그 (False → Vanilla 동작)
+  * 커밋: (M3 SOTA 변형)
 
-- [ ] #112 TubeAwareCost 비용 함수
+- [x] #112 TubeAwareCost 비용 함수 ✓ 2026-02-07
   * cost_functions.py에 TubeAwareCost 추가
   * 장애물 safety_margin + tube_margin 확장
 
-- [ ] #113 Vanilla vs Tube 비교 데모
-  * examples/mppi_vanilla_vs_tube_demo.py
+- [x] #113 Vanilla vs Tube 비교 데모 ✓ 2026-02-07
+  * examples/comparison/vanilla_vs_tube_demo.py
   * --noise 외란 강도 조절
   * --live 실시간 비교
+  * Plot: plots/vanilla_vs_tube_comparison.png
 
 ---
 

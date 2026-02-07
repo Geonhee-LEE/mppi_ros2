@@ -216,9 +216,12 @@ def evaluate_learned_model(
     # 1. Kinematic model (ground truth)
     kinematic_model = DifferentialDriveKinematic(v_max=1.0, omega_max=1.0)
 
-    # 2. Neural model
-    neural_model = NeuralDynamics(state_dim=3, control_dim=2)
-    neural_model.load_model("models/learned_models/best_model.pth")
+    # 2. Neural model (will load config from checkpoint)
+    neural_model = NeuralDynamics(
+        state_dim=3,
+        control_dim=2,
+        model_path="models/learned_models/best_model.pth",
+    )
 
     # 3. Residual model (kinematic + neural correction)
     def neural_residual_fn(state, control):

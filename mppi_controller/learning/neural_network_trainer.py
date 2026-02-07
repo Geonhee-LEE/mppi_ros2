@@ -133,6 +133,9 @@ class NeuralNetworkTrainer:
         """
         self.state_dim = state_dim
         self.control_dim = control_dim
+        self.hidden_dims = hidden_dims
+        self.activation = activation
+        self.dropout_rate = dropout_rate
         self.device = torch.device(device)
 
         # Build model
@@ -163,7 +166,6 @@ class NeuralNetworkTrainer:
             mode='min',
             factor=0.5,
             patience=10,
-            verbose=True,
         )
 
         # Training history
@@ -343,7 +345,9 @@ class NeuralNetworkTrainer:
             "config": {
                 "state_dim": self.state_dim,
                 "control_dim": self.control_dim,
-                "hidden_dims": self.model.hidden_dims,
+                "hidden_dims": self.hidden_dims,
+                "activation": self.activation,
+                "dropout_rate": self.dropout_rate,
             },
         }, filepath)
 
@@ -356,7 +360,7 @@ class NeuralNetworkTrainer:
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Model file not found: {filepath}")
 
-        checkpoint = torch.load(filepath, map_location=self.device)
+        checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
 
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

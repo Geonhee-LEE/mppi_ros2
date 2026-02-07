@@ -446,7 +446,7 @@ class GaussianProcessTrainer:
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Model file not found: {filepath}")
 
-        checkpoint = torch.load(filepath, map_location=self.device)
+        checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
 
         # Load config
         config = checkpoint["config"]

@@ -201,7 +201,7 @@ class GaussianProcessDynamics(RobotModel):
             )
             import gpytorch
 
-            checkpoint = torch.load(model_path, map_location=self.device)
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
 
             # Extract config
             config = checkpoint["config"]

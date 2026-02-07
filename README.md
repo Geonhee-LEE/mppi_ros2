@@ -507,6 +507,109 @@ pytest tests/test_stein_variational_mppi.py -v
 | 수치 안정성 | Log-MPPI | NaN/Inf 방지 |
 | 제어 부드러움 | Smooth MPPI | Input-lifting |
 
+## 📊 결과 갤러리
+
+### MPPI 변형 비교
+
+#### 전체 벤치마크 (9개 변형)
+
+![MPPI All Variants Benchmark](plots/mppi_all_variants_benchmark.png)
+
+**9패널 종합 분석**: Vanilla, Tube, Log, Tsallis, Risk-Aware, SVMPC, Smooth, Spline, SVG-MPPI의 XY 궤적, 위치/헤딩 오차, 제어 입력, 계산 시간 비교.
+
+| 변형 | RMSE (m) | 계산 시간 (ms) | 특징 |
+|------|----------|----------------|------|
+| **Vanilla** | 0.006 | 5.0 | 기본 MPPI |
+| **Tube** | 0.023 | 5.5 | 외란 강건성 |
+| **Log** | 0.006 | 5.1 | 수치 안정성 |
+| **Tsallis** | 0.006 | 5.2 | 탐색 조절 |
+| **Risk-Aware** | 0.008 | 5.3 | CVaR 보수적 |
+| **SVMPC** | 0.007 | 1035.2 | O(K²) 다양성 |
+| **Smooth** | 0.006 | 5.4 | Δu 부드러움 |
+| **Spline** | 0.012 | 14.5 | 73% 메모리 ↓ |
+| **SVG** | 0.005 | 51.3 | 최고 정확도 |
+
+---
+
+#### Vanilla vs Tube MPPI
+
+![Vanilla vs Tube Comparison](plots/vanilla_vs_tube_comparison.png)
+
+**외란 강건성 비교**: Tube-MPPI는 ancillary controller로 body frame 외란을 보정.
+
+---
+
+#### Vanilla vs Log MPPI
+
+![Vanilla vs Log MPPI Comparison](plots/vanilla_vs_log_mppi_comparison.png)
+
+**수치 안정성**: Log-space softmax로 NaN/Inf 방지.
+
+---
+
+#### Smooth MPPI (모델별)
+
+![Smooth MPPI Models Comparison](plots/smooth_mppi_models_comparison.png)
+
+**Input-lifting 비교**: Kinematic vs Dynamic vs Residual 모델에서 Δu 최소화 효과.
+
+---
+
+#### Spline MPPI (모델별)
+
+![Spline MPPI Models Comparison](plots/spline_mppi_models_comparison.png)
+
+**B-spline 보간**: 16,384 → 4,096 요소 (73% 메모리 감소).
+
+---
+
+#### SVG-MPPI (모델별)
+
+![SVG MPPI Models Comparison](plots/svg_mppi_models_comparison.png)
+
+**Guide particle SVGD**: O(K²) → O(G²) 복잡도 감소, 0.005m 최고 정확도.
+
+---
+
+#### SVMPC (모델별)
+
+![SVMPC Models Comparison](plots/svmpc_models_comparison.png)
+
+**Stein Variational MPC**: O(K²) 커널 연산으로 샘플 다양성 확보 (1035ms).
+
+---
+
+### 학습 모델 비교
+
+#### Neural Dynamics 학습 결과
+
+![Neural Dynamics Comparison](plots/neural_dynamics_comparison.png)
+
+**9패널 종합 분석** (Physics vs Neural vs Residual):
+- 상단: XY 궤적, X/Y 시계열
+- 중단: Position/Heading 오차
+- 하단: 제어 입력, 성능 요약
+
+| 모델 | RMSE (m) | Heading RMSE (rad) | 계산 시간 (ms) |
+|------|----------|-------------------|----------------|
+| Physics (Kinematic) | 0.007 | 0.004 | 4.6 |
+| Neural (Learned) | 0.068 | 0.038 | 24.0 |
+| Residual (Hybrid) | 0.092 | 0.051 | 31.0 |
+
+---
+
+#### Neural Dynamics 학습 곡선
+
+![Neural Dynamics Training](plots/neural_dynamics_training_history.png)
+
+**학습 프로세스**:
+- 데이터: 600 샘플 (30초 원형 궤적)
+- 모델: MLP [128, 128, 64], 25,731 파라미터
+- 학습: 63 에포크 (early stopping)
+- 최종 Val Loss: 0.019
+
+---
+
 ## 📚 문서
 
 ### 프로젝트 문서

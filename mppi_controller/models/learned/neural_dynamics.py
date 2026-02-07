@@ -140,19 +140,23 @@ class NeuralDynamics(RobotModel):
             # Import here to avoid dependency if not using neural models
             from mppi_controller.learning.neural_network_trainer import DynamicsMLPModel
 
-            checkpoint = torch.load(model_path, map_location=self.device)
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
 
             # Extract config
             config = checkpoint["config"]
             input_dim = config["state_dim"] + config["control_dim"]
             output_dim = config["state_dim"]
             hidden_dims = config["hidden_dims"]
+            activation = config.get("activation", "relu")
+            dropout_rate = config.get("dropout_rate", 0.0)
 
             # Build model
             self.model = DynamicsMLPModel(
                 input_dim=input_dim,
                 output_dim=output_dim,
                 hidden_dims=hidden_dims,
+                activation=activation,
+                dropout_rate=dropout_rate,
             ).to(self.device)
 
             # Load weights

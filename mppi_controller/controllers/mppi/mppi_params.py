@@ -127,6 +127,21 @@ class TubeMPPIParams(MPPIParams):
 
 
 @dataclass
+class LogMPPIParams(MPPIParams):
+    """
+    Log-MPPI 전용 추가 파라미터
+
+    Attributes:
+        use_baseline: Baseline 적용 (최소 비용으로 정규화)
+    """
+
+    use_baseline: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+
+
+@dataclass
 class TsallisMPPIParams(MPPIParams):
     """
     Tsallis-MPPI 전용 추가 파라미터

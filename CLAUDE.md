@@ -4,7 +4,7 @@
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│           Phase 1, 2, 3 (M1, M2, M3) 완료! ✓               │
+│         Phase 1, 2, 3, 4 (M1, M2, M3, M3.5) 완료! ✓        │
 ├────────────────────────────────────────────────────────────┤
 │  ✓ Phase 1: 기구학 모델 및 Vanilla MPPI                   │
 │    - Circle RMSE: 0.006m, Time: 4.96ms                    │
@@ -15,13 +15,18 @@
 │    - 기구학 vs 동역학 비교 데모                           │
 │    - 커밋: 004139d (3 files, 759 lines)                   │
 │                                                            │
-│  ✓ Phase 3: 학습 모델 (Residual Dynamics)                 │
-│    - Physics + Learned 하이브리드                         │
-│    - 5개 유닛 테스트 전부 통과                            │
-│    - Physics vs Learned 3-way 비교                        │
-│    - 커밋: f34753e (6 files, 1375 lines)                  │
+│  ✓ Phase 3: MPPI 변형 9종 (Tube/Log/Tsallis/...)          │
+│    - 전체 벤치마크: 9개 변형 비교                         │
+│    - SVG-MPPI: 0.005m (최고 정확도)                       │
+│    - 커밋: 여러 커밋 (M3 SOTA)                            │
+│                                                            │
+│  ✓ Phase 4: 학습 모델 고도화 (Neural/GP/Residual)         │
+│    - 3개 학습 모델 + 3개 학습 파이프라인                  │
+│    - 9개 Plot 갤러리 (MPPI 7개 + Learned 2개)             │
+│    - 문서화 1224 lines (2개 가이드)                       │
+│    - 커밋: 84b222f, 7cf7a99                               │
 ├────────────────────────────────────────────────────────────┤
-│  → 다음: ROS2 통합 또는 MPPI 변형 (Tube/SOTA)             │
+│  → 다음: ROS2 통합 (M4) 또는 GPU 가속                     │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -33,23 +38,33 @@
   - MPPIController 및 시뮬레이션 인프라
   - 성능 검증 완료 (목표 달성)
 
-- [x] **M2: 고도화** (Phase 2 일부) - ✅ **부분 완료** (2026-02-07)
+- [x] **M2: 고도화** (Phase 2) - ✅ **완료** (2026-02-07)
   - Differential Drive 동역학 모델 ✓
   - 기구학 vs 동역학 비교 데모 ✓
-  - Adaptive Temperature (예정)
-  - Colored Noise (샘플러 준비 완료)
+  - Colored Noise 샘플러 ✓
 
-- [x] **M3: SOTA 변형** (Phase 3 일부) - ✅ **부분 완료** (2026-02-07)
-  - ResidualDynamics (학습 모델) ✓
-  - NeuralDynamics 스켈레톤 (PyTorch 준비) ✓
-  - GaussianProcessDynamics 스켈레톤 (GPytorch 준비) ✓
-  - Log-MPPI, Tsallis-MPPI, Risk-Aware MPPI (예정)
-  - Stein Variational MPPI (예정)
+- [x] **M3: SOTA 변형** (Phase 3) - ✅ **완료** (2026-02-07)
+  - Log-MPPI ✓
+  - Tsallis-MPPI ✓
+  - Risk-Aware MPPI ✓
+  - Stein Variational MPPI (SVMPC) ✓
+  - Tube-MPPI ✓
 
-- [ ] **M3.5: 확장 변형**
-  - Smooth MPPI, Spline-MPPI, SVG-MPPI
+- [x] **M3.5: 확장 변형** (Phase 3) - ✅ **완료** (2026-02-07)
+  - Smooth MPPI ✓
+  - Spline-MPPI ✓
+  - SVG-MPPI ✓
 
-- [ ] **M4: ROS2 통합** (Phase 4)
+- [x] **M3.6: 학습 모델 고도화** (Phase 4) - ✅ **완료** (2026-02-07)
+  - NeuralDynamics (PyTorch MLP) ✓
+  - GaussianProcessDynamics (GPytorch Sparse GP) ✓
+  - ResidualDynamics (Hybrid) ✓
+  - 3개 학습 파이프라인 ✓
+  - 온라인 학습 ✓
+  - 문서화 1224 lines ✓
+  - Plot 갤러리 9개 ✓
+
+- [ ] **M4: ROS2 통합** (Phase 5)
   - nav2 플러그인
   - 실제 로봇 인터페이스
 

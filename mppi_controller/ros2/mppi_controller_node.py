@@ -13,6 +13,7 @@ from typing import Optional
 
 from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Odometry, Path
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Header
 
 from mppi_controller.models.kinematic.differential_drive_kinematic import (
@@ -32,6 +33,8 @@ from mppi_controller.controllers.mppi.stein_variational_mppi import (
 )
 from mppi_controller.controllers.mppi.spline_mppi import SplineMPPIController
 from mppi_controller.controllers.mppi.svg_mppi import SVGMPPIController
+from mppi_controller.controllers.mppi.cbf_mppi import CBFMPPIController
+from mppi_controller.controllers.mppi.shield_mppi import ShieldMPPIController
 from mppi_controller.controllers.mppi.mppi_params import (
     MPPIParams,
     TubeMPPIParams,
@@ -42,7 +45,11 @@ from mppi_controller.controllers.mppi.mppi_params import (
     SteinVariationalMPPIParams,
     SplineMPPIParams,
     SVGMPPIParams,
+    CBFMPPIParams,
+    ShieldMPPIParams,
 )
+from mppi_controller.perception.obstacle_detector import ObstacleDetector
+from mppi_controller.perception.obstacle_tracker import ObstacleTracker
 
 
 class MPPIControllerNode(Node):
@@ -107,6 +114,17 @@ class MPPIControllerNode(Node):
             qos_profile
         )
 
+        # LaserScan obstacle detection
+        self.obstacle_detector = None
+        self.obstacle_tracker = None
+        if self.get_parameter('scan_enabled').value:
+            self.obstacle_detector = ObstacleDetector()
+            self.obstacle_tracker = ObstacleTracker()
+            self.scan_sub = self.create_subscription(
+                LaserScan, '/scan', self.scan_callback, 10
+            )
+            self.get_logger().info('  LaserScan obstacle detection enabled')
+
         # Control timer
         control_rate = self.get_parameter('control_rate').value
         self.control_timer = self.create_timer(
@@ -138,6 +156,16 @@ class MPPIControllerNode(Node):
         self.declare_parameter('Q', [10.0, 10.0, 1.0])  # state tracking
         self.declare_parameter('R', [0.1, 0.1])  # control effort
         self.declare_parameter('Qf', [20.0, 20.0, 2.0])  # terminal
+
+        # CBF/Shield parameters
+        self.declare_parameter('cbf_alpha', 0.3)
+        self.declare_parameter('cbf_weight', 1000.0)
+        self.declare_parameter('cbf_safety_margin', 0.1)
+        self.declare_parameter('cbf_use_safety_filter', False)
+        self.declare_parameter('shield_enabled', True)
+
+        # LaserScan obstacle detection
+        self.declare_parameter('scan_enabled', False)
 
         # Node parameters
         self.declare_parameter('control_rate', 10.0)  # Hz
@@ -240,6 +268,29 @@ class MPPIControllerNode(Node):
                 svg_guide_step_size=0.01,
             )
             return SVGMPPIController(self.model, params)
+
+        elif controller_type == 'cbf':
+            params = CBFMPPIParams(
+                **params_dict,
+                cbf_obstacles=[],
+                cbf_alpha=self.get_parameter('cbf_alpha').value,
+                cbf_weight=self.get_parameter('cbf_weight').value,
+                cbf_safety_margin=self.get_parameter('cbf_safety_margin').value,
+                cbf_use_safety_filter=self.get_parameter('cbf_use_safety_filter').value,
+            )
+            return CBFMPPIController(self.model, params)
+
+        elif controller_type == 'shield':
+            params = ShieldMPPIParams(
+                **params_dict,
+                cbf_obstacles=[],
+                cbf_alpha=self.get_parameter('cbf_alpha').value,
+                cbf_weight=self.get_parameter('cbf_weight').value,
+                cbf_safety_margin=self.get_parameter('cbf_safety_margin').value,
+                cbf_use_safety_filter=self.get_parameter('cbf_use_safety_filter').value,
+                shield_enabled=self.get_parameter('shield_enabled').value,
+            )
+            return ShieldMPPIController(self.model, params)
 
         else:
             self.get_logger().warn(
@@ -349,6 +400,28 @@ class MPPIControllerNode(Node):
         except Exception as e:
             self.get_logger().error(f'Control computation failed: {e}')
             self.publish_zero_velocity()
+
+    def scan_callback(self, msg: LaserScan):
+        """LaserScan callback — detect and track obstacles"""
+        if self.obstacle_detector is None or self.obstacle_tracker is None:
+            return
+
+        robot_pose = self.current_state[:3] if self.current_state is not None else None
+
+        detections = self.obstacle_detector.detect(
+            np.array(msg.ranges),
+            msg.angle_min,
+            msg.angle_increment,
+            robot_pose,
+        )
+
+        control_rate = self.get_parameter('control_rate').value
+        dt = 1.0 / control_rate
+        self.obstacle_tracker.update(detections, dt)
+
+        if hasattr(self.controller, 'update_obstacles'):
+            obstacles = self.obstacle_tracker.get_obstacles_as_tuples()
+            self.controller.update_obstacles(obstacles)
 
     def publish_control(self, control: np.ndarray):
         """Publish control command"""

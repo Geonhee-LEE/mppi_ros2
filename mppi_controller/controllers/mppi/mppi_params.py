@@ -5,7 +5,7 @@ MPPI 파라미터 데이터클래스
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 
 
@@ -249,3 +249,52 @@ class SVGMPPIParams(SteinVariationalMPPIParams):
             self.svg_num_guide_particles > 0
         ), "svg_num_guide_particles must be positive"
         assert self.svg_guide_step_size > 0, "svg_guide_step_size must be positive"
+
+
+@dataclass
+class CBFMPPIParams(MPPIParams):
+    """
+    CBF-MPPI 전용 추가 파라미터
+
+    Attributes:
+        cbf_obstacles: 장애물 리스트 [(x, y, radius), ...]
+        cbf_weight: CBF 위반 비용 가중치
+        cbf_alpha: Class-K function 파라미터 (0 < alpha <= 1)
+        cbf_safety_margin: 추가 안전 마진 (m)
+        cbf_use_safety_filter: QP 안전 필터 사용 여부
+    """
+
+    cbf_obstacles: List[tuple] = field(default_factory=list)
+    cbf_weight: float = 1000.0
+    cbf_alpha: float = 0.1
+    cbf_safety_margin: float = 0.1
+    cbf_use_safety_filter: bool = False
+
+    def __post_init__(self):
+        super().__post_init__()
+        assert 0 < self.cbf_alpha <= 1.0, "cbf_alpha must be in (0, 1]"
+        assert self.cbf_weight >= 0, "cbf_weight must be non-negative"
+        assert self.cbf_safety_margin >= 0, "cbf_safety_margin must be non-negative"
+
+
+@dataclass
+class ShieldMPPIParams(CBFMPPIParams):
+    """
+    Shield-MPPI 전용 추가 파라미터
+
+    Rollout 중 매 timestep마다 CBF 제약을 해석적으로 적용하여
+    모든 K개 샘플 궤적이 안전하도록 보장.
+
+    Attributes:
+        shield_enabled: Shield 기능 활성화 (False면 CBF-MPPI 폴백)
+        shield_cbf_alpha: Shield용 CBF alpha (None이면 cbf_alpha 사용)
+    """
+
+    shield_enabled: bool = True
+    shield_cbf_alpha: Optional[float] = None  # None이면 cbf_alpha 사용
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.shield_cbf_alpha is not None:
+            assert 0 < self.shield_cbf_alpha <= 1.0, \
+                "shield_cbf_alpha must be in (0, 1]"

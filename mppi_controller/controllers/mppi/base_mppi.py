@@ -88,6 +88,26 @@ class MPPIController:
         # 메트릭 저장
         self.last_info = {}
 
+        # GPU 가속 설정
+        self._use_gpu = (params.device == "cuda") and self._check_gpu_available()
+        if self._use_gpu:
+            from mppi_controller.controllers.mppi.gpu import (
+                TorchDynamicsWrapper,
+                TorchCompositeCost,
+                TorchGaussianSampler,
+                get_torch_model,
+            )
+            import torch
+            torch_model = get_torch_model(model, params.device)
+            self._gpu_dynamics = TorchDynamicsWrapper(
+                torch_model, params.dt, params.device
+            )
+            self._gpu_cost = TorchCompositeCost(
+                params.Q, params.R, params.Qf, device=params.device
+            )
+            self._gpu_sampler = TorchGaussianSampler(params.sigma, params.device)
+            self._torch = torch
+
     def compute_control(
         self, state: np.ndarray, reference_trajectory: np.ndarray
     ) -> Tuple[np.ndarray, Dict]:
@@ -108,6 +128,9 @@ class MPPIController:
                 - ess: float (Effective Sample Size)
                 - num_samples: int
         """
+        if self._use_gpu:
+            return self._compute_control_gpu(state, reference_trajectory)
+
         K = self.params.K
         N = self.params.N
 
@@ -165,6 +188,90 @@ class MPPIController:
         self.last_info = info
 
         return optimal_control, info
+
+    def _compute_control_gpu(
+        self, state: np.ndarray, reference_trajectory: np.ndarray
+    ) -> Tuple[np.ndarray, Dict]:
+        """GPU 가속 제어 계산 — 전체 파이프라인을 GPU에서 실행"""
+        torch = self._torch
+        K, N = self.params.K, self.params.N
+        device = self.params.device
+
+        # 1. GPU 노이즈 생성 (K, N, nu) — GPU에서 직접 생성
+        noise_t = self._gpu_sampler.sample(self.U, K)
+
+        # 2. GPU 제어 시퀀스
+        U_t = torch.tensor(self.U, device=device, dtype=torch.float32)
+        controls_t = U_t + noise_t
+
+        if self.u_min is not None:
+            u_min_t = torch.tensor(self.u_min, device=device, dtype=torch.float32)
+            u_max_t = torch.tensor(self.u_max, device=device, dtype=torch.float32)
+            controls_t = torch.clamp(controls_t, u_min_t, u_max_t)
+
+        # 3. GPU rollout (K, N+1, nx)
+        state_t = torch.tensor(state, device=device, dtype=torch.float32)
+        state_t = state_t.unsqueeze(0).expand(K, -1)  # (K, nx)
+        trajectories_t = self._gpu_dynamics.rollout(state_t, controls_t)
+
+        # 4. GPU 비용 (K,)
+        ref_t = torch.tensor(
+            reference_trajectory, device=device, dtype=torch.float32
+        )
+        costs_t = self._gpu_cost.compute_cost(trajectories_t, controls_t, ref_t)
+
+        # 5. GPU 가중치 (softmax)
+        min_cost = torch.min(costs_t)
+        exp_costs = torch.exp(-(costs_t - min_cost) / self.params.lambda_)
+        weights_t = exp_costs / torch.sum(exp_costs)
+
+        # 6. GPU 가중 평균 업데이트
+        weighted_noise = torch.sum(
+            weights_t[:, None, None] * noise_t, dim=0
+        )  # (N, nu)
+        U_new = U_t + weighted_noise
+
+        if self.u_min is not None:
+            U_new = torch.clamp(U_new, u_min_t, u_max_t)
+
+        # 7. Receding horizon shift
+        U_new = torch.roll(U_new, -1, dims=0)
+        U_new[-1, :] = 0.0
+
+        # 8. CPU로 변환하여 저장
+        self.U = U_new.cpu().numpy()
+        optimal_control = self.U[0, :]
+
+        # 9. Info (numpy로 변환)
+        costs_np = costs_t.detach().cpu().numpy()
+        weights_np = weights_t.detach().cpu().numpy()
+        trajectories_np = trajectories_t.detach().cpu().numpy()
+        best_idx = int(torch.argmin(costs_t).item())
+
+        ess = float(1.0 / (weights_np ** 2).sum())
+
+        info = {
+            "sample_trajectories": trajectories_np,
+            "sample_weights": weights_np,
+            "best_trajectory": trajectories_np[best_idx],
+            "best_cost": float(costs_np[best_idx]),
+            "mean_cost": float(costs_np.mean()),
+            "temperature": self.params.lambda_,
+            "ess": ess,
+            "num_samples": K,
+        }
+        self.last_info = info
+
+        return optimal_control, info
+
+    @staticmethod
+    def _check_gpu_available():
+        """CUDA GPU 사용 가능 여부 확인"""
+        try:
+            import torch
+            return torch.cuda.is_available()
+        except ImportError:
+            return False
 
     def _compute_weights(self, costs: np.ndarray, lambda_: float) -> np.ndarray:
         """

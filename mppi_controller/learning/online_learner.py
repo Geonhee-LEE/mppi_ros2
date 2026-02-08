@@ -325,16 +325,21 @@ class OnlineLearner:
         # Get data
         data = self.buffer.get_all_data()
 
-        # Split train/val (80/20)
-        num_train = int(len(data["states"]) * 0.8)
+        # Split train/val (80/20) with shuffle to avoid temporal bias
+        n_samples = len(data["states"])
+        indices = np.random.permutation(n_samples)
+        num_train = int(n_samples * 0.8)
 
-        train_states = data["states"][:num_train]
-        train_controls = data["controls"][:num_train]
-        train_state_dots = data["state_dots"][:num_train]
+        train_idx = indices[:num_train]
+        val_idx = indices[num_train:]
 
-        val_states = data["states"][num_train:]
-        val_controls = data["controls"][num_train:]
-        val_state_dots = data["state_dots"][num_train:]
+        train_states = data["states"][train_idx]
+        train_controls = data["controls"][train_idx]
+        train_state_dots = data["state_dots"][train_idx]
+
+        val_states = data["states"][val_idx]
+        val_controls = data["controls"][val_idx]
+        val_state_dots = data["state_dots"][val_idx]
 
         # Prepare inputs/targets
         train_inputs = np.concatenate([train_states, train_controls], axis=1)
@@ -479,10 +484,11 @@ class OnlineLearner:
         }
 
     def __repr__(self) -> str:
+        improvement = self.adaptation_metrics['improvement']
+        improvement_str = f"{improvement:.2f}%" if improvement is not None else "N/A"
         return (
             f"OnlineLearner("
             f"buffer={len(self.buffer)}/{self.buffer_size}, "
             f"updates={self.performance_history['num_updates']}, "
-            f"improvement={self.adaptation_metrics['improvement']:.2f}% "
-            f"if self.adaptation_metrics['improvement'] else 'N/A')"
+            f"improvement={improvement_str})"
         )

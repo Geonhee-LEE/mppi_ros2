@@ -2,9 +2,9 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-43%20Passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-134%20Passing-brightgreen)](tests/)
 
-완전한 MPPI (Model Predictive Path Integral) 제어 라이브러리로, 9가지 SOTA 변형과 3가지 로봇 모델 타입을 지원합니다.
+완전한 MPPI (Model Predictive Path Integral) 제어 라이브러리로, 9가지 SOTA 변형, 5가지 안전 제어 기법, 3가지 로봇 모델 타입, GPU 가속을 지원합니다.
 
 ## 🎯 주요 특징
 
@@ -30,6 +30,68 @@
   - **Neural Dynamics**: PyTorch MLP 기반 end-to-end 학습
   - **Gaussian Process**: 불확실성 정량화
   - **Residual Dynamics**: 물리 모델 + 학습 보정
+
+### 5가지 Safety-Critical Control
+
+```
+1. Standard CBF-MPPI     - 거리 기반 CBF 비용 + QP 안전 필터
+2. C3BF (Collision Cone) - 상대 속도 방향 인식 barrier
+3. DPCBF (Parabolic)     - LoS 좌표 + 적응형 포물선 경계
+4. Optimal-Decay CBF     - ω 최적화로 guaranteed feasibility
+5. Gatekeeper            - 백업 궤적 검증 → 무한 시간 안전
+```
+
+추가 기능:
+- **Shield-MPPI**: 롤아웃 중 매 timestep 해석적 CBF 제약 적용
+- **Superellipsoid 장애물**: 타원/직사각형 등 비원형 장애물 지원
+- **동적 장애물 회피**: LaserScan 기반 감지/추적 + 속도 추정
+
+#### Safety 비교 벤치마크
+
+**Static (정적 장애물 3개)**
+
+| 기법 | Solve (ms) | Min Clearance (m) | 충돌 | 특징 |
+|------|-----------|-------------------|------|------|
+| Standard CBF | 2.1 | 0.22 | No | 기본 거리 barrier |
+| **C3BF** | 2.5 | 0.15 | No | 멀어지면 비용 0 |
+| **DPCBF** | 2.6 | **0.21** | No | 방향별 적응 경계 |
+| Optimal-Decay | 2.7 | 1.12 | No | 가장 보수적 |
+| Gatekeeper | 2.7 | 0.24 | No | 무한 시간 안전 |
+
+**Crossing (교차 동적 장애물 2개)**
+
+| 기법 | Solve (ms) | Min Clearance (m) | 충돌 | 특징 |
+|------|-----------|-------------------|------|------|
+| Standard CBF | 2.0 | 1.70 | No | 정적 CBF로도 회피 |
+| **C3BF** | 2.3 | 0.37 | No | 속도 방향 고려 → 좁은 통과 |
+| **DPCBF** | 2.5 | 1.70 | No | LoS 적응 경계 |
+| Optimal-Decay | 2.6 | 1.88 | No | 최대 마진 유지 |
+| Gatekeeper | 2.6 | 1.70 | No | 백업 궤적 안전 |
+
+**Narrow (좁은 통로, 장애물 4개)**
+
+| 기법 | Solve (ms) | Min Clearance (m) | 충돌 | 특징 |
+|------|-----------|-------------------|------|------|
+| Standard CBF | 2.1 | 0.50 | No | 균등 회피 |
+| **C3BF** | 2.5 | 0.50 | No | 측면 통과 효율적 |
+| **DPCBF** | 2.7 | 0.50 | No | 측면 마진 축소 |
+| Optimal-Decay | 2.9 | 1.19 | No | 보수적 → 통과 어려움 |
+| Gatekeeper | 2.7 | 0.50 | No | 통과 가능 시만 진행 |
+
+> 5가지 기법 모두 3개 시나리오에서 **충돌 0건**. 자세한 알고리즘 설명은 [Safety-Critical Control 가이드](docs/safety/SAFETY_CRITICAL_CONTROL.md) 참조.
+
+### GPU 가속 (PyTorch CUDA)
+
+`device="cuda"` 설정만으로 GPU 가속 활성화. 기존 CPU 코드 무수정.
+
+| K (샘플 수) | CPU | GPU (RTX 5080) | Speedup |
+|------------|-----|----------------|---------|
+| 256 | 1.6ms | 4.0ms | 0.4x |
+| 1,024 | 4.6ms | 4.0ms | 1.1x |
+| **4,096** | **18.4ms** | **4.2ms** | **4.4x** |
+| **8,192** | **37.0ms** | **4.6ms** | **8.1x** |
+
+> GPU 시간은 K에 무관하게 ~4ms 일정. K=4096+ 대규모 샘플링에서 진가 발휘.
 
 ### 성능 벤치마크
 
@@ -98,6 +160,25 @@ simulator.reset(initial_state)
 history = simulator.run(reference_fn, duration=15.0)
 
 print(f"Position RMSE: {compute_metrics(history)['position_rmse']:.4f}m")
+```
+
+### GPU 가속 사용
+
+```python
+# device="cuda" 설정만으로 GPU 가속 활성화 (기존 코드 변경 불필요)
+params = MPPIParams(
+    N=30, dt=0.05,
+    K=4096,         # GPU에서는 대규모 샘플도 ~4ms!
+    lambda_=1.0,
+    sigma=np.array([0.5, 0.5]),
+    Q=np.array([10.0, 10.0, 1.0]),
+    R=np.array([0.1, 0.1]),
+    device="cuda",  # "cpu" → "cuda" 변경만으로 GPU 활성화
+)
+controller = MPPIController(model, params)
+
+# 반환값은 항상 numpy — 기존 코드와 100% 호환
+control, info = controller.compute_control(state, reference_trajectory)
 ```
 
 ### 다른 MPPI 변형 사용
@@ -248,11 +329,28 @@ python examples/comparison/spline_mppi_models_comparison.py --trajectory circle 
 python examples/comparison/svg_mppi_models_comparison.py --trajectory circle --guides 32
 ```
 
+### 안전 제어 비교
+
+```bash
+# 5가지 Safety-Critical Control 비교 (static/crossing/narrow)
+python examples/comparison/safety_comparison_demo.py --scenario static
+python examples/comparison/safety_comparison_demo.py --scenario crossing
+python examples/comparison/safety_comparison_demo.py --scenario narrow
+
+# 실시간 애니메이션 모드 (5개 메서드 동시 시각화)
+python examples/comparison/safety_comparison_demo.py --live
+python examples/comparison/safety_comparison_demo.py --live --scenario crossing
+python examples/comparison/safety_comparison_demo.py --live --scenario narrow
+```
+
 ### 전체 벤치마크
 
 ```bash
 # 9개 변형 종합 비교
 python examples/mppi_all_variants_benchmark.py --trajectory circle --duration 15
+
+# CPU vs GPU 벤치마크 (K=256/1024/4096/8192)
+python examples/comparison/gpu_benchmark_demo.py --trajectory circle --duration 10
 ```
 
 ### 학습 모델 데모
@@ -424,7 +522,7 @@ mppi_ros2/
 │   │   └── learned/               # 학습 모델
 │   │
 │   ├── controllers/mppi/          # MPPI 컨트롤러
-│   │   ├── base_mppi.py           # Vanilla MPPI
+│   │   ├── base_mppi.py           # Vanilla MPPI (+ GPU 경로)
 │   │   ├── tube_mppi.py           # Tube-MPPI
 │   │   ├── log_mppi.py            # Log-MPPI
 │   │   ├── tsallis_mppi.py        # Tsallis-MPPI
@@ -433,10 +531,22 @@ mppi_ros2/
 │   │   ├── stein_variational_mppi.py  # SVMPC
 │   │   ├── spline_mppi.py         # Spline-MPPI
 │   │   ├── svg_mppi.py            # SVG-MPPI
+│   │   ├── cbf_mppi.py            # CBF-MPPI
+│   │   ├── shield_mppi.py         # Shield-MPPI
+│   │   ├── c3bf_cost.py           # Collision Cone CBF
+│   │   ├── dpcbf_cost.py          # Dynamic Parabolic CBF
+│   │   ├── optimal_decay_cbf_filter.py  # Optimal-Decay CBF
+│   │   ├── gatekeeper.py          # Gatekeeper Safety Shield
+│   │   ├── backup_controller.py   # Backup Controllers
+│   │   ├── superellipsoid_cost.py # Superellipsoid 장애물
 │   │   ├── mppi_params.py         # 파라미터 클래스
 │   │   ├── dynamics_wrapper.py    # 배치 동역학
 │   │   ├── cost_functions.py      # 비용 함수
-│   │   └── sampling.py            # 노이즈 샘플러
+│   │   ├── sampling.py            # 노이즈 샘플러
+│   │   └── gpu/                   # GPU 가속 (PyTorch CUDA)
+│   │       ├── torch_dynamics.py  # GPU rollout
+│   │       ├── torch_costs.py     # GPU 비용 함수
+│   │       └── torch_sampling.py  # GPU 노이즈 생성
 │   │
 │   ├── simulation/                # 시뮬레이션 도구
 │   │   ├── simulator.py           # 시뮬레이터
@@ -447,7 +557,7 @@ mppi_ros2/
 │       ├── trajectory.py          # 궤적 생성
 │       └── stein_variational.py   # SVGD 유틸리티
 │
-├── tests/                         # 유닛 테스트 (43개)
+├── tests/                         # 유닛 테스트 (134개)
 ├── examples/                      # 예제 스크립트
 ├── docs/                          # 문서
 └── configs/                       # 설정 파일
@@ -465,7 +575,7 @@ pytest tests/test_spline_mppi.py -v
 pytest tests/test_stein_variational_mppi.py -v
 ```
 
-**테스트 현황**: 43개 테스트 전부 통과 ✅
+**테스트 현황**: 134개 테스트 전부 통과 (17 파일) ✅
 
 ## 📈 성능 비교
 
@@ -480,8 +590,9 @@ pytest tests/test_stein_variational_mppi.py -v
                    │  ● Risk-Aware
                    │    ● Tsallis
                    │       ● Spline
-                   └────────────────→ 속도
-           느림 (1500ms)      빠름 (5ms)
+                   │          ● Vanilla+GPU (K=8192, 4.6ms)
+                   └──────────────────────────→ 속도
+           느림 (1500ms)              빠름 (4ms)
 ```
 
 ### 메모리 효율성
@@ -499,8 +610,14 @@ pytest tests/test_stein_variational_mppi.py -v
 | 시나리오 | 추천 변형 | 이유 |
 |---------|----------|------|
 | 실시간 제어 | Vanilla, Tube, Log | ~5ms 초고속 |
+| 대규모 샘플링 | Vanilla + GPU | K=8192도 ~4ms |
 | 외란 환경 | Tube-MPPI | 명목+피드백 강건성 |
 | 고정밀 추적 | SVG-MPPI | 0.0054m 최고 정확도 |
+| 장애물 회피 | CBF/Shield-MPPI | CBF 안전 보장 |
+| 동적 장애물 | C3BF / DPCBF | 속도 방향 인식 회피 |
+| 밀집 환경 | Optimal-Decay | 제약 완화로 feasibility 보장 |
+| 무한 시간 안전 | Gatekeeper | 백업 궤적 기반 안전 검증 |
+| 비원형 장애물 | Superellipsoid | 타원/직사각형 장애물 |
 | 메모리 제약 | Spline-MPPI | 73% 메모리 감소 |
 | 안전 중시 | Risk-Aware | CVaR 보수적 제어 |
 | 탐색 필요 | Tsallis-MPPI | q 파라미터 조절 |
@@ -579,6 +696,77 @@ pytest tests/test_stein_variational_mppi.py -v
 
 ---
 
+#### CBF-MPPI 장애물 회피
+
+![CBF MPPI Obstacle Avoidance](plots/cbf_mppi_obstacle_avoidance.png)
+
+**Control Barrier Function**: CBF 비용 페널티로 안전 거리 유지. 장애물 근처에서 비용이 기하급수적으로 증가.
+
+---
+
+#### Shield-MPPI
+
+![Shield MPPI Comparison](plots/shield_mppi_comparison.png)
+
+**Shielded Rollout**: 매 timestep마다 해석적 CBF 제약 적용. 모든 K개 샘플 궤적이 안전하도록 보장.
+
+---
+
+#### 동적 장애물 회피
+
+![Dynamic Obstacle Avoidance](plots/dynamic_obstacle_avoidance.png)
+
+**LaserScan 기반 실시간 회피**: 장애물 감지/추적 + CBF/Shield 3종 비교.
+
+---
+
+#### Safety-Critical Control 비교 (정적 장애물)
+
+![Safety Comparison Static](plots/safety_comparison_static.png)
+
+**5가지 안전 제어 기법**: Standard CBF, C3BF (Collision Cone), DPCBF (Dynamic Parabolic), Optimal-Decay CBF, Gatekeeper 비교. 전 메서드 충돌 0건. `--live` 모드로 실시간 2x3 애니메이션 확인 가능.
+
+| 기법 | Solve | Min Clearance | 특징 |
+|------|-------|---------------|------|
+| Standard CBF | 2.1ms | 0.22m | 거리 기반 barrier |
+| C3BF | 2.5ms | 0.15m | 상대 속도 방향 인식 |
+| DPCBF | 2.6ms | 0.21m | LoS 적응 경계 |
+| Optimal-Decay | 2.7ms | 1.12m | 가장 보수적 |
+| Gatekeeper | 2.7ms | 0.24m | 무한 시간 안전 |
+
+---
+
+#### Safety-Critical Control 비교 (교차 장애물)
+
+![Safety Comparison Crossing](plots/safety_comparison_crossing.png)
+
+**동적 장애물 교차 시나리오**: 장애물이 위/아래에서 교차하는 상황. C3BF는 상대 속도를 고려하여 더 효율적인 회피 경로 생성.
+
+---
+
+#### Safety-Critical Control 비교 (좁은 통로)
+
+![Safety Comparison Narrow](plots/safety_comparison_narrow.png)
+
+**좁은 통로 시나리오**: 양측 장애물 사이 좁은 통로 통과. DPCBF의 방향별 적응 경계가 측면 통과 시 불필요한 회피를 감소.
+
+---
+
+#### GPU 벤치마크 (CPU vs GPU)
+
+![GPU Benchmark](plots/gpu_benchmark.png)
+
+**PyTorch CUDA 가속**: K=4096에서 4.4x, K=8192에서 8.1x speedup. GPU 시간 ~4ms 일정.
+
+| K | CPU (ms) | GPU (ms) | Speedup |
+|---|----------|----------|---------|
+| 256 | 1.6 | 4.0 | 0.4x |
+| 1,024 | 4.6 | 4.0 | 1.1x |
+| 4,096 | 18.4 | 4.2 | **4.4x** |
+| 8,192 | 37.0 | 4.6 | **8.1x** |
+
+---
+
 ### 학습 모델 비교
 
 #### Neural Dynamics 학습 결과
@@ -618,6 +806,9 @@ pytest tests/test_stein_variational_mppi.py -v
 - [CLAUDE Development Guide](CLAUDE.md)
 - [TODO List](TODO.md)
 
+### Safety-Critical Control 가이드
+- [Safety-Critical Control 종합 가이드](docs/safety/SAFETY_CRITICAL_CONTROL.md)
+
 ### 학습 모델 가이드
 - [학습 모델 종합 가이드](docs/learned_models/LEARNED_MODELS_GUIDE.md)
 - [온라인 학습 가이드](docs/learned_models/ONLINE_LEARNING.md)
@@ -641,13 +832,24 @@ pytest tests/test_stein_variational_mppi.py -v
 - Bhardwaj et al. (2024) - "Spline-MPPI"
 - Kondo et al. (2024) - "SVG-MPPI"
 
+### Safety-Critical Control
+- Thirugnanam et al. (2024) - "Safety-Critical Control with Collision Cone CBFs"
+- Zeng et al. (2021) - "Safety-Critical MPC with Discrete-Time CBF"
+- Kim et al. (2026) - "Dynamic Parabolic CBFs" (ICRA 2026)
+- Gurriet et al. (2020) - "Scalable Safety-Critical Control of Robotic Systems"
+- Rimon & Koditschek (1992) - "Exact Robot Navigation Using Artificial Potential Functions"
+
 ## 🛠️ 개발 로드맵
 
-### ✅ 완료 (M1-M3.5)
+### ✅ 완료 (M1-M3.5, M3.6, GPU, Safety)
 - [x] 9가지 MPPI 변형 구현
-- [x] 3가지 로봇 모델 타입
-- [x] 종합 벤치마크 도구
-- [x] 43개 유닛 테스트
+- [x] 3가지 로봇 모델 타입 (Kinematic/Dynamic/Learned)
+- [x] 5가지 Safety-Critical Control (CBF/C3BF/DPCBF/Optimal-Decay/Gatekeeper)
+- [x] Shield-MPPI + Superellipsoid 장애물
+- [x] 동적 장애물 감지/추적/회피
+- [x] GPU 가속 (PyTorch CUDA, 8.1x speedup)
+- [x] 종합 벤치마크 + Safety 비교 데모
+- [x] 134개 유닛 테스트 (17 파일)
 
 ### 🚧 진행 중 (M4)
 - [ ] ROS2 통합
@@ -656,8 +858,10 @@ pytest tests/test_stein_variational_mppi.py -v
 
 ### 📅 계획 중 (M5)
 - [ ] C++ 포팅 (실시간 성능)
-- [ ] GPU 가속 (CuPy/JAX)
+- [ ] GPU 가속 MPPI 변형 확장 (현재 Vanilla만 지원)
 - [ ] 추가 로봇 모델 (Swerve, Ackermann)
+- [ ] Backup CBF (Sensitivity Propagation)
+- [ ] Multi-robot CBF (다중 에이전트 충돌 회피)
 
 ## 🤝 기여
 
@@ -679,7 +883,7 @@ pytest tests/test_stein_variational_mppi.py -v
 - GitHub: [@Geonhee-LEE](https://github.com/Geonhee-LEE)
 
 **With assistance from:**
-- Claude Sonnet 4.5 (Anthropic)
+- Claude Sonnet 4.5 / Opus 4.6 (Anthropic)
 
 ## 🙏 감사의 말
 

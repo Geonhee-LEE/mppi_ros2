@@ -516,10 +516,11 @@
 
 ## ⚡ Performance Optimization (P1)
 
-- [ ] #701 GPU 가속 (CuPy/JAX)
-  * rollout 병렬화
-  * cost 계산 병렬화
-  * K=4096+ 대규모 샘플 지원
+- [x] #701 GPU 가속 (PyTorch CUDA) ✓ 2026-02-08
+  * gpu/ 패키지: torch_dynamics, torch_costs, torch_sampling
+  * base_mppi.py device 분기 (CPU 코드 무수정)
+  * RTX 5080: K=4096→4.4x, K=8192→8.1x speedup
+  * 95개 테스트 전부 통과
 
 - [ ] #702 SVMPC GPU 가속
   * pairwise kernel CUDA 가속
@@ -539,6 +540,74 @@
   * cProfile 분석
   * 병목 지점 식별
   * 최적화 적용
+
+---
+
+## 🛡️ Safety-Critical Control 고도화 (P0) — safe_control 기반
+
+> Ref: https://github.com/tkkim-robot/safe_control (Univ. of Michigan, DASC Lab)
+
+### Phase S1: 동적 장애물 CBF 고도화 (~250줄) ✅ 완료
+
+- [x] #710 C3BF (Collision Cone CBF) 비용 함수 ✓ 2026-02-08
+  * controllers/mppi/c3bf_cost.py — CollisionConeCBFCost
+  * 상대 속도 방향 고려 barrier: h = <p_rel, v_rel> + ||p_rel||·||v_rel||·cos(φ)
+  * cos(φ) = sqrt(||p_rel||² - R²) / ||p_rel||
+  * obstacle_tracker.py의 (vx, vy) 속도 직접 활용
+
+- [x] #711 Optimal-Decay CBF 안전 필터 ✓ 2026-02-08
+  * controllers/mppi/optimal_decay_cbf_filter.py — OptimalDecayCBFSafetyFilter
+  * ω (decay rate) 추가 최적화 변수로 CBF 실현가능성 보장
+  * min ||u - u_ref||² + p_sb·(ω - 1)² s.t. ḣ + α·ω·h ≥ 0
+
+- [x] #712 DPCBF (Dynamic Parabolic CBF) 비용 함수 ✓ 2026-02-08
+  * controllers/mppi/dpcbf_cost.py — DynamicParabolicCBFCost
+  * Line-of-Sight 좌표 변환 + Gaussian-shaped 안전 경계
+  * 접근 속도에 비례하여 안전 영역 자동 확대
+
+- [x] #713 C3BF + DPCBF + Optimal-Decay 테스트 ✓ 2026-02-08
+  * tests/test_safety_advanced.py — 20개 테스트
+  * C3BF 6개 + DPCBF 7개 + Optimal-Decay 7개
+
+### Phase S2: 안전 보장 강화 (~400줄) ✅ 완료
+
+- [x] #720 Gatekeeper Safety Shielding ✓ 2026-02-08
+  * controllers/mppi/gatekeeper.py — Gatekeeper
+  * 백업 궤적 안전 검증 → 무한 시간 안전 보장
+  * gate_open/closed 상태로 MPPI/백업 제어 선택
+
+- [x] #721 Backup Controller (정지/회전) ✓ 2026-02-08
+  * controllers/mppi/backup_controller.py
+  * BrakeBackupController: 즉시 정지
+  * TurnAndBrakeBackupController: 장애물 반대 방향 회전 후 정지
+
+- [x] #722 Superellipsoid 장애물 지원 ✓ 2026-02-08
+  * controllers/mppi/superellipsoid_cost.py
+  * SuperellipsoidObstacle: (x'/a)^n + (y'/b)^n - 1 (회전 지원)
+  * SuperellipsoidCost: discrete-time CBF 비용
+  * tests/test_gatekeeper_superellipsoid.py — 19개 테스트
+
+- [x] #723 Safety 비교 평가 데모 ✓ 2026-02-08
+  * examples/comparison/safety_comparison_demo.py
+  * CBF vs C3BF vs DPCBF vs Optimal-Decay vs Gatekeeper 5-way 비교
+  * 3가지 시나리오: static, crossing, narrow
+
+### Phase S3: 고급 확장 (~300줄)
+
+- [ ] #730 Backup CBF (Sensitivity Propagation)
+  * controllers/mppi/backup_cbf.py — BackupCBFFilter
+  * 백업 궤적 rollout + 민감도 행렬 전파
+  * 현재 제어가 백업 궤적 전체 안전에 미치는 영향 평가
+  * multi-constraint QP
+  * Ref: Chen et al. "Backup CBF"
+
+- [ ] #731 Multi-robot CBF
+  * 로봇 간 충돌 회피 제약
+  * 다중 MPPI 에이전트 협조 제어
+
+- [ ] #732 MPCC Cost Function
+  * Contouring/Lag 오차 분리
+  * 경로 추종 성능 향상
 
 ---
 

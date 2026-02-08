@@ -210,6 +210,10 @@ class GaussianProcessTrainer:
         """
         self.norm_stats = norm_stats
 
+        # Clear previous models to prevent accumulation on repeated train() calls
+        self.gp_models = []
+        self.likelihoods = []
+
         # Convert to tensors
         train_x = torch.FloatTensor(train_inputs).to(self.device)
         train_y = torch.FloatTensor(train_targets).to(self.device)
@@ -457,15 +461,50 @@ class GaussianProcessTrainer:
         self.num_inducing_points = config.get("num_inducing_points", 100)
         self.use_ard = config.get("use_ard", True)
 
-        # Reconstruct models (need dummy data)
-        # This is a limitation - need to store architecture info
-        # For now, user should provide training data shape
-
         self.norm_stats = checkpoint["norm_stats"]
-        self.history = checkpoint.get("history", {})
+        self.history = checkpoint.get("history", {"train_loss": [], "val_loss": []})
+
+        # Reconstruct GP models from saved state dicts
+        models_state = checkpoint["models_state_dict"]
+        likelihoods_state = checkpoint["likelihoods_state_dict"]
+
+        input_dim = self.state_dim + self.control_dim
+        dummy_train_x = torch.randn(10, input_dim).to(self.device)
+        dummy_train_y = torch.randn(10).to(self.device)
+
+        self.gp_models = []
+        self.likelihoods = []
+
+        for output_dim in range(self.state_dim):
+            likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
+
+            if self.use_sparse:
+                num_inducing = self.num_inducing_points
+                inducing_points = torch.randn(num_inducing, input_dim).to(self.device)
+                model = SparseGPModel(
+                    inducing_points=inducing_points,
+                    kernel_type=self.kernel_type,
+                    use_ard=self.use_ard,
+                ).to(self.device)
+            else:
+                model = ExactGPModel(
+                    train_x=dummy_train_x,
+                    train_y=dummy_train_y,
+                    likelihood=likelihood,
+                    kernel_type=self.kernel_type,
+                    use_ard=self.use_ard,
+                ).to(self.device)
+
+            model.load_state_dict(models_state[output_dim])
+            likelihood.load_state_dict(likelihoods_state[output_dim])
+            model.eval()
+            likelihood.eval()
+
+            self.gp_models.append(model)
+            self.likelihoods.append(likelihood)
 
         print(f"[GaussianProcessTrainer] Models loaded from {filepath}")
-        print(f"  Note: Call _rebuild_models() with sample data to fully restore")
+        print(f"  Restored {len(self.gp_models)} GP models")
 
     def get_model_summary(self) -> str:
         """Get model summary"""

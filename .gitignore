@@ -104,6 +104,9 @@ Thumbs.db
 *.gif
 *.mp4
 
+# But track result plots in plots/ directory
+!plots/*.png
+
 # Data files
 *.npy
 *.npz

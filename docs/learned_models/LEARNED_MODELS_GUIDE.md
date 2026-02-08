@@ -9,26 +9,32 @@
 5. [성능 비교 및 선택 가이드](#성능-비교-및-선택-가이드)
 6. [온라인 학습 및 적응](#온라인-학습-및-적응)
 7. [MPPI 통합](#mppi-통합)
-8. [베스트 프랙티스](#베스트-프랙티스)
-9. [API 레퍼런스](#api-레퍼런스)
+8. [고급 기능](#고급-기능)
+9. [베스트 프랙티스](#베스트-프랙티스)
+10. [API 레퍼런스](#api-레퍼런스)
 
 ---
 
 ## 개요
 
-MPPI ROS2는 **3가지 학습 기반 동역학 모델**을 지원합니다:
+MPPI ROS2는 **5가지 학습 기반 동역학 모델**을 지원합니다:
 
 1. **Neural Dynamics**: 심층 신경망 기반 end-to-end 학습
 2. **Gaussian Process Dynamics**: 베이지안 비모수 모델, 불확실성 정량화
 3. **Residual Dynamics**: 물리 모델 + 학습 보정 (하이브리드)
+4. **Ensemble Neural Dynamics**: M개 MLP 앙상블, 분산 기반 불확실성
+5. **MC-Dropout Dynamics**: 추론 시 dropout으로 베이지안 근사
 
 ### 핵심 특징
 
 - **통일된 인터페이스**: 모든 학습 모델이 `RobotModel` 베이스 클래스 구현
 - **MPPI 호환성**: 기구학/동역학 모델과 동일한 방식으로 사용 가능
-- **온라인 학습**: 실시간 데이터 수집 및 모델 업데이트
-- **불확실성 정량화**: GP 기반 신뢰 구간 제공
+- **온라인 학습**: 실시간 데이터 수집 및 모델 업데이트 (체크포인트 버전 관리 포함)
+- **불확실성 정량화**: GP / 앙상블 / MC-Dropout 기반 불확실성 추정
+- **불확실성 인식 비용**: `UncertaintyAwareCost`로 Risk-Aware MPPI 연동
+- **모델 검증**: `ModelValidator`로 RMSE/MAE/R² 통합 평가
 - **Sim-to-Real 전이**: 도메인 적응 지원
+- **GPU 가속**: `TorchNeuralDynamics`로 MPPI 루프 내 GPU 추론
 
 ---
 
@@ -103,6 +109,69 @@ MPPI ROS2는 **3가지 학습 기반 동역학 모델**을 지원합니다:
 - 물리 모델이 존재하지만 불완전함
 - 마찰, 공기저항 등 모델링 어려운 항
 - Sim-to-Real 전이 (시뮬레이터 모델 보정)
+
+### 4. Ensemble Neural Dynamics
+
+**특징**:
+- M개의 독립 학습된 MLP 앙상블
+- 앙상블 평균: 예측, 앙상블 분산: 불확실성
+- 부트스트랩 학습 (각 멤버마다 리샘플링)
+
+**장점**:
+- NN에서도 불확실성 정량화 가능
+- GP보다 빠른 추론 (O(1) vs O(N²))
+- Risk-Aware MPPI 연동 가능
+
+**단점**:
+- M배 메모리/학습 비용
+- MC-Dropout 대비 무거움
+
+**사용 사례**:
+- 불확실성이 필요하지만 GP 추론 속도가 부족한 경우
+- UncertaintyAwareCost와 연동
+- 고속 제어 (~50Hz) + 불확실성
+
+```python
+from mppi_controller.models.learned.ensemble_dynamics import EnsembleNeuralDynamics
+
+model = EnsembleNeuralDynamics(
+    state_dim=3, control_dim=2,
+    model_path="models/learned_models/ensemble.pth",
+)
+mean, std = model.predict_with_uncertainty(state, control)
+```
+
+### 5. MC-Dropout Dynamics
+
+**특징**:
+- 단일 MLP에서 추론 시 dropout 활성화
+- M회 forward pass의 분산으로 불확실성 추정
+- Gal & Ghahramani (2016) 의 Bayesian 근사
+
+**장점**:
+- 앙상블 대비 경량 (단일 모델)
+- 학습 비용 1회 (앙상블은 M회)
+- dropout_rate로 불확실성 크기 조절
+
+**단점**:
+- 학습 시 dropout_rate > 0 필수
+- 앙상블보다 불확실성 품질 낮을 수 있음
+
+**사용 사례**:
+- 경량 불확실성 추정
+- 메모리 제약 환경
+- 기존 dropout 모델 재활용
+
+```python
+from mppi_controller.models.learned.mc_dropout_dynamics import MCDropoutDynamics
+
+model = MCDropoutDynamics(
+    state_dim=3, control_dim=2,
+    model_path="models/learned_models/best_model.pth",
+    num_samples=20,
+)
+mean, std = model.predict_with_uncertainty(state, control)
+```
 
 ---
 
@@ -381,10 +450,20 @@ from mppi_controller.models.learned.residual_dynamics import ResidualDynamics
 def residual_fn(state, control):
     return residual_trainer.predict(state, control, denormalize=True)
 
-# Residual Dynamics 생성
+# Residual Dynamics 생성 (방법 1: 함수 래핑)
 residual_model = ResidualDynamics(
     base_model=physics_model,
     residual_fn=residual_fn,
+)
+
+# 방법 2: 학습 모델 직접 연결 (권장)
+# NeuralDynamics/GP를 learned_model로 전달하면 자동으로
+# forward_dynamics → residual_fn, predict_with_uncertainty → uncertainty_fn 연결
+from mppi_controller.models.learned.neural_dynamics import NeuralDynamics
+learned = NeuralDynamics(model_path="residual_model.pth", state_dim=3, control_dim=2)
+residual_model = ResidualDynamics(
+    base_model=physics_model,
+    learned_model=learned,  # 자동 와이어링
 )
 
 # MPPI와 통합
@@ -397,12 +476,14 @@ controller = MPPIController(model=residual_model, params=params)
 
 ### 데이터 효율성
 
-| 모델 타입 | 필요 데이터 | 학습 시간 | 추론 속도 |
-|----------|------------|----------|----------|
-| Neural | 5,000+ 샘플 | ~5분 (GPU) | 0.1ms |
-| GP (Exact) | 1,000-2,000 샘플 | ~10분 | 10ms |
-| GP (Sparse) | 5,000+ 샘플 | ~15분 | 5ms |
-| Residual | 2,000-3,000 샘플 | ~3분 | 0.2ms |
+| 모델 타입 | 필요 데이터 | 학습 시간 | 추론 속도 | 불확실성 |
+|----------|------------|----------|----------|---------|
+| Neural | 5,000+ 샘플 | ~5분 (GPU) | 0.1ms | 없음 |
+| GP (Exact) | 1,000-2,000 샘플 | ~10분 | 10ms | 높은 품질 |
+| GP (Sparse) | 5,000+ 샘플 | ~15분 | 5ms | 높은 품질 |
+| Residual | 2,000-3,000 샘플 | ~3분 | 0.2ms | 선택적 |
+| Ensemble (M=5) | 5,000+ 샘플 | ~25분 (5x) | 0.5ms | 중간 품질 |
+| MC-Dropout (M=20) | 5,000+ 샘플 | ~5분 (1x) | 2ms | 낮은 품질 |
 
 ### 정확도 비교 (Differential Drive 예시)
 
@@ -596,6 +677,117 @@ control, info = controller.compute_control(state, reference_trajectory)
 
 ---
 
+## 고급 기능
+
+### 앙상블 학습 (EnsembleTrainer)
+
+M개의 독립 MLP를 부트스트랩 학습:
+
+```python
+from mppi_controller.learning.ensemble_trainer import EnsembleTrainer
+
+trainer = EnsembleTrainer(
+    state_dim=3, control_dim=2,
+    num_models=5,
+    hidden_dims=[128, 128],
+)
+trainer.train(train_inputs, train_targets, val_inputs, val_targets, norm_stats)
+trainer.save_model("ensemble.pth")
+```
+
+### 모델 검증 (ModelValidator)
+
+학습 모델의 성능을 RMSE/MAE/R²/롤아웃 오차로 평가:
+
+```python
+from mppi_controller.learning.model_validator import ModelValidator
+
+validator = ModelValidator()
+
+# 단일 모델 평가
+metrics = validator.evaluate(model.forward_dynamics, test_states, test_controls, test_targets)
+print(f"RMSE: {metrics['rmse']:.6f}, R²: {metrics['r2']:.4f}")
+
+# 여러 모델 비교
+results = validator.compare(
+    {"Neural": nn_model.forward_dynamics, "GP": gp_model.forward_dynamics},
+    test_states, test_controls, test_targets,
+)
+validator.print_comparison(results)
+```
+
+### 불확실성 인식 비용 함수 (UncertaintyAwareCost)
+
+GP/앙상블 불확실성에 비례하는 MPPI 비용 함수:
+
+```python
+from mppi_controller.controllers.mppi.uncertainty_cost import UncertaintyAwareCost
+
+# GP 모델 불확실성 연동
+unc_cost = UncertaintyAwareCost(
+    uncertainty_fn=lambda s, c: gp_model.predict_with_uncertainty(s, c)[1],
+    beta=10.0,     # 불확실성 페널티 가중치
+    reduce="sum",  # "sum", "max", "mean"
+)
+
+# 앙상블 모델 불확실성 연동
+unc_cost = UncertaintyAwareCost(
+    uncertainty_fn=lambda s, c: ensemble.predict_with_uncertainty(s, c)[1],
+    beta=5.0,
+)
+```
+
+### GPU 가속 (TorchNeuralDynamics)
+
+NeuralDynamics를 MPPI GPU 루프 내에서 사용 시 numpy↔torch 변환 오버헤드 제거:
+
+```python
+from mppi_controller.controllers.mppi.gpu import get_torch_model
+
+# NeuralDynamics → TorchNeuralDynamics 자동 변환
+torch_model = get_torch_model(neural_model, device="cuda")
+```
+
+### 체크포인트 버전 관리
+
+OnlineLearner에서 `checkpoint_dir`를 설정하면 자동으로 모델 버전 관리:
+
+```python
+online_learner = OnlineLearner(
+    model=model, trainer=trainer,
+    checkpoint_dir="models/checkpoints",
+    max_checkpoints=10,
+)
+
+# 자동 동작:
+# 1. update_model() 호출 시 model_v{N}.pth 자동 저장
+# 2. val_loss가 최적 대비 50% 이상 악화 시 자동 롤백
+# 3. 오래된 체크포인트 자동 정리
+
+# 수동 롤백
+online_learner.rollback(version=3)
+
+# 체크포인트 히스토리 확인
+for cp in online_learner.get_checkpoint_history():
+    best = " *BEST*" if cp["is_best"] else ""
+    print(f"  v{cp['version']}: val_loss={cp['val_loss']:.6f}{best}")
+```
+
+### Simulator 통합
+
+Simulator에서 OnlineLearner 자동 데이터 피드:
+
+```python
+from mppi_controller.simulation.simulator import Simulator
+
+sim = Simulator(
+    model=model, controller=controller, dt=0.05,
+    online_learner=online_learner,  # 자동 add_sample() 호출
+)
+```
+
+---
+
 ## 베스트 프랙티스
 
 ### 데이터 수집
@@ -688,6 +880,7 @@ class ResidualDynamics(RobotModel):
         base_model: RobotModel,
         residual_fn: Optional[Callable] = None,
         uncertainty_fn: Optional[Callable] = None,
+        learned_model: Optional[RobotModel] = None,  # 자동 와이어링
     )
 
     def forward_dynamics(
@@ -696,6 +889,45 @@ class ResidualDynamics(RobotModel):
         control: np.ndarray,
     ) -> np.ndarray:
         """f_physics + f_learned"""
+```
+
+### EnsembleNeuralDynamics
+
+```python
+class EnsembleNeuralDynamics(RobotModel):
+    def __init__(
+        self,
+        state_dim: int,
+        control_dim: int,
+        model_path: Optional[str] = None,
+        device: str = "cpu",
+    )
+
+    def forward_dynamics(self, state, control) -> np.ndarray:
+        """앙상블 평균"""
+
+    def predict_with_uncertainty(self, state, control) -> Tuple[np.ndarray, np.ndarray]:
+        """(평균, 표준편차) 반환"""
+```
+
+### MCDropoutDynamics
+
+```python
+class MCDropoutDynamics(RobotModel):
+    def __init__(
+        self,
+        state_dim: int,
+        control_dim: int,
+        model_path: Optional[str] = None,
+        num_samples: int = 20,
+        device: str = "cpu",
+    )
+
+    def forward_dynamics(self, state, control) -> np.ndarray:
+        """MC 평균"""
+
+    def predict_with_uncertainty(self, state, control) -> Tuple[np.ndarray, np.ndarray]:
+        """(MC 평균, MC 표준편차) 반환"""
 ```
 
 ### OnlineLearner
@@ -804,5 +1036,5 @@ python examples/learned/online_learning_demo.py \
 
 ---
 
-**마지막 업데이트**: 2025-02-07
-**작성자**: Claude Sonnet 4.5 + Geonhee LEE
+**마지막 업데이트**: 2026-02-08
+**작성자**: Claude Sonnet 4.5 + Claude Opus 4.6 + Geonhee LEE

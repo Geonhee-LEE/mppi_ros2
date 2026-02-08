@@ -470,6 +470,57 @@ Performance:
 
 ---
 
+## 체크포인트 버전 관리
+
+온라인 학습 중 모델 성능 하락에 대비한 자동 버전 관리:
+
+```python
+online_learner = OnlineLearner(
+    model=model,
+    trainer=trainer,
+    checkpoint_dir="models/checkpoints",  # 체크포인트 디렉토리
+    max_checkpoints=10,                   # 최대 보관 수
+)
+```
+
+### 자동 동작
+
+1. **버전 저장**: `update_model()` 호출 시 `model_v{N}.pth` 자동 저장
+2. **성능 감시**: val_loss가 최적 대비 50% 이상 악화 시 자동 롤백
+3. **정리**: 오래된 체크포인트 자동 삭제 (최적 체크포인트는 보존)
+
+### 수동 롤백
+
+```python
+# 최적 체크포인트로 롤백
+online_learner.rollback()
+
+# 특정 버전으로 롤백
+online_learner.rollback(version=3)
+
+# 체크포인트 히스토리 확인
+for cp in online_learner.get_checkpoint_history():
+    best = " *BEST*" if cp["is_best"] else ""
+    print(f"  v{cp['version']}: val_loss={cp['val_loss']:.6f}{best}")
+```
+
+## Simulator 통합
+
+Simulator에서 OnlineLearner를 직접 연결하면 `step()` 호출 시 자동으로 데이터가 수집됩니다:
+
+```python
+from mppi_controller.simulation.simulator import Simulator
+
+sim = Simulator(
+    model=model, controller=controller, dt=0.05,
+    online_learner=online_learner,
+)
+
+# sim.step() 호출 시 자동으로 online_learner.add_sample() 실행
+```
+
+---
+
 ## 제한사항
 
 1. **계산 비용**
@@ -479,6 +530,7 @@ Performance:
 2. **Catastrophic Forgetting**
    - 새 환경에 과적합하면 이전 환경 잊음
    - 해결: Replay buffer 또는 regularization
+   - 해결: 체크포인트 버전 관리로 자동 롤백
 
 3. **데이터 분포 변화**
    - 극단적 domain shift는 실패 가능
@@ -495,5 +547,5 @@ Performance:
 
 ---
 
-**문서 작성**: Claude Sonnet 4.5
-**마지막 업데이트**: 2026-02-07
+**문서 작성**: Claude Sonnet 4.5 + Claude Opus 4.6
+**마지막 업데이트**: 2026-02-08

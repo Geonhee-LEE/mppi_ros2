@@ -9,6 +9,8 @@ import numpy as np
 from typing import Optional, Dict, List, Tuple, Callable
 from collections import deque
 import time
+import os
+from pathlib import Path
 
 
 class OnlineDataBuffer:
@@ -238,6 +240,8 @@ class OnlineLearner:
         min_samples_for_update: int = 100,
         update_interval: int = 500,
         verbose: bool = True,
+        checkpoint_dir: Optional[str] = None,
+        max_checkpoints: int = 10,
     ):
         """
         Args:
@@ -248,6 +252,8 @@ class OnlineLearner:
             min_samples_for_update: 업데이트 최소 샘플 수
             update_interval: 업데이트 주기 (샘플 수)
             verbose: 로그 출력
+            checkpoint_dir: 체크포인트 저장 디렉토리 (None이면 비활성화)
+            max_checkpoints: 최대 체크포인트 보관 수
         """
         self.model = model
         self.trainer = trainer
@@ -256,6 +262,13 @@ class OnlineLearner:
         self.min_samples_for_update = min_samples_for_update
         self.update_interval = update_interval
         self.verbose = verbose
+
+        # Checkpoint versioning
+        self.checkpoint_dir = checkpoint_dir
+        self.max_checkpoints = max_checkpoints
+        self.checkpoint_versions: List[Dict] = []  # [{version, path, val_loss, timestamp}]
+        if checkpoint_dir is not None:
+            Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
         # Online data buffer
         self.buffer = OnlineDataBuffer(
@@ -381,11 +394,40 @@ class OnlineLearner:
 
         update_time = time.time() - start_time
 
+        # Check for performance degradation and rollback if needed
+        prev_val_loss = (
+            self.performance_history["validation_losses"][-1]
+            if len(self.performance_history["validation_losses"]) > 0
+            else None
+        )
+
         # Update performance history
         self.performance_history["num_updates"] += 1
         self.performance_history["update_timestamps"].append(time.time())
         self.performance_history["validation_losses"].append(val_loss)
         self.performance_history["buffer_sizes"].append(len(self.buffer))
+
+        # Checkpoint versioning
+        if self.checkpoint_dir is not None:
+            version = self.performance_history["num_updates"]
+
+            # Check for significant degradation (>50% worse than best)
+            best_checkpoint = self._get_best_checkpoint()
+            if (
+                best_checkpoint is not None
+                and val_loss > best_checkpoint["val_loss"] * 1.5
+            ):
+                if self.verbose:
+                    print(
+                        f"  Performance degradation detected! "
+                        f"(val_loss={val_loss:.6f} vs best={best_checkpoint['val_loss']:.6f})"
+                    )
+                    print(f"  Rolling back to v{best_checkpoint['version']}...")
+                self.rollback(best_checkpoint["version"])
+                return
+
+            # Save checkpoint
+            self._save_checkpoint(version, val_loss)
 
         if self.verbose:
             print(f"  Update completed in {update_time:.2f}s")
@@ -468,6 +510,98 @@ class OnlineLearner:
             "adaptation_improvement": self.adaptation_metrics["improvement"],
         }
 
+    def _save_checkpoint(self, version: int, val_loss: float):
+        """체크포인트 저장"""
+        if self.checkpoint_dir is None:
+            return
+
+        filename = f"model_v{version}.pth"
+        filepath = os.path.join(self.checkpoint_dir, filename)
+
+        if hasattr(self.trainer, "save_model"):
+            self.trainer.save_model(filename)
+
+        self.checkpoint_versions.append({
+            "version": version,
+            "path": filepath,
+            "val_loss": val_loss,
+            "timestamp": time.time(),
+        })
+
+        # Prune old checkpoints (keep best + recent max_checkpoints)
+        if len(self.checkpoint_versions) > self.max_checkpoints:
+            best = self._get_best_checkpoint()
+            # Sort by version (oldest first), remove oldest non-best
+            to_remove = []
+            for cp in self.checkpoint_versions[:-self.max_checkpoints]:
+                if cp["version"] != best["version"]:
+                    to_remove.append(cp)
+
+            for cp in to_remove:
+                if os.path.exists(cp["path"]):
+                    os.remove(cp["path"])
+                self.checkpoint_versions.remove(cp)
+
+        if self.verbose:
+            print(f"  Checkpoint saved: {filename} (val_loss={val_loss:.6f})")
+
+    def _get_best_checkpoint(self) -> Optional[Dict]:
+        """최적 체크포인트 반환 (최저 val_loss)"""
+        if not self.checkpoint_versions:
+            return None
+        return min(self.checkpoint_versions, key=lambda c: c["val_loss"])
+
+    def rollback(self, version: Optional[int] = None):
+        """
+        이전 체크포인트로 롤백
+
+        Args:
+            version: 롤백할 버전 (None이면 최적 체크포인트)
+        """
+        if not self.checkpoint_versions:
+            if self.verbose:
+                print("[OnlineLearner] No checkpoints available for rollback")
+            return False
+
+        if version is None:
+            target = self._get_best_checkpoint()
+        else:
+            targets = [c for c in self.checkpoint_versions if c["version"] == version]
+            if not targets:
+                if self.verbose:
+                    print(f"[OnlineLearner] Checkpoint v{version} not found")
+                return False
+            target = targets[0]
+
+        if not os.path.exists(target["path"]):
+            if self.verbose:
+                print(f"[OnlineLearner] Checkpoint file not found: {target['path']}")
+            return False
+
+        # Load checkpoint
+        filename = os.path.basename(target["path"])
+        if hasattr(self.trainer, "load_model"):
+            self.trainer.load_model(filename)
+
+        if self.verbose:
+            print(
+                f"[OnlineLearner] Rolled back to v{target['version']} "
+                f"(val_loss={target['val_loss']:.6f})"
+            )
+        return True
+
+    def get_checkpoint_history(self) -> List[Dict]:
+        """체크포인트 히스토리 반환"""
+        return [
+            {
+                "version": cp["version"],
+                "val_loss": cp["val_loss"],
+                "timestamp": cp["timestamp"],
+                "is_best": cp == self._get_best_checkpoint(),
+            }
+            for cp in self.checkpoint_versions
+        ]
+
     def reset(self):
         """리셋"""
         self.buffer.clear()
@@ -482,6 +616,7 @@ class OnlineLearner:
             "current_error": None,
             "improvement": None,
         }
+        self.checkpoint_versions = []
 
     def __repr__(self) -> str:
         improvement = self.adaptation_metrics['improvement']

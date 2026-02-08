@@ -17,6 +17,7 @@ from mppi_controller.controllers.mppi.gpu.torch_models import (
     TorchSwerveDriveKinematic,
     TorchSwerveDriveDynamic,
 )
+from mppi_controller.controllers.mppi.gpu.torch_learned import TorchNeuralDynamics
 
 
 def get_torch_model(model, device="cuda"):
@@ -45,6 +46,11 @@ def get_torch_model(model, device="cuda"):
     from mppi_controller.models.dynamic.swerve_drive_dynamic import (
         SwerveDriveDynamic,
     )
+    from mppi_controller.models.learned.neural_dynamics import NeuralDynamics
+
+    # NeuralDynamics → TorchNeuralDynamics (nn.Module 직접 감싸기)
+    if isinstance(model, NeuralDynamics):
+        return TorchNeuralDynamics(model, device=device)
 
     if isinstance(model, DifferentialDriveKinematic):
         return TorchDiffDriveKinematic(device=device)
@@ -70,7 +76,7 @@ def get_torch_model(model, device="cuda"):
     raise ValueError(
         f"GPU acceleration not supported for {model.__class__.__name__}. "
         f"Supported: DifferentialDriveKinematic, AckermannKinematic, "
-        f"AckermannDynamic, SwerveDriveKinematic, SwerveDriveDynamic"
+        f"AckermannDynamic, SwerveDriveKinematic, SwerveDriveDynamic, NeuralDynamics"
     )
 
 
@@ -83,5 +89,6 @@ __all__ = [
     "TorchAckermannDynamic",
     "TorchSwerveDriveKinematic",
     "TorchSwerveDriveDynamic",
+    "TorchNeuralDynamics",
     "get_torch_model",
 ]

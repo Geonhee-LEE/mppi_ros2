@@ -31,11 +31,13 @@ class Simulator:
         controller,
         dt: float,
         process_noise_std: Optional[np.ndarray] = None,
+        online_learner=None,
     ):
         self.model = model
         self.controller = controller
         self.dt = dt
         self.process_noise_std = process_noise_std
+        self.online_learner = online_learner
 
         # 히스토리 초기화
         self.history = {
@@ -95,7 +97,13 @@ class Simulator:
         # 4. 상태 정규화 (각도 등)
         next_state = self.model.normalize_state(next_state)
 
-        # 5. 히스토리 기록
+        # 5. 온라인 학습 데이터 피드
+        if self.online_learner is not None:
+            self.online_learner.add_sample(
+                self.state, control, next_state, self.dt
+            )
+
+        # 6. 히스토리 기록
         self.history["time"].append(self.t)
         self.history["state"].append(self.state.copy())
         self.history["control"].append(control.copy())
@@ -103,7 +111,7 @@ class Simulator:
         self.history["solve_time"].append(solve_time)
         self.history["info"].append(info)
 
-        # 6. 상태 업데이트
+        # 7. 상태 업데이트
         self.state = next_state
         self.t += self.dt
 

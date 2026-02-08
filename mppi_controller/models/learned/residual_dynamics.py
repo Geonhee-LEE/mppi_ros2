@@ -48,11 +48,24 @@ class ResidualDynamics(RobotModel):
         residual_fn: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
         uncertainty_fn: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
         use_residual: bool = True,
+        learned_model: Optional[RobotModel] = None,
     ):
         self.base_model = base_model
-        self.residual_fn = residual_fn
-        self.uncertainty_fn = uncertainty_fn
         self.use_residual = use_residual
+
+        # learned_model이 주어지면 자동으로 residual_fn/uncertainty_fn 연결
+        if learned_model is not None:
+            self.learned_model = learned_model
+            self.residual_fn = learned_model.forward_dynamics
+            # GP 모델이면 uncertainty_fn 자동 연결
+            if hasattr(learned_model, 'predict_with_uncertainty'):
+                self.uncertainty_fn = lambda s, u: learned_model.predict_with_uncertainty(s, u)[1]
+            else:
+                self.uncertainty_fn = uncertainty_fn
+        else:
+            self.learned_model = None
+            self.residual_fn = residual_fn
+            self.uncertainty_fn = uncertainty_fn
 
         # 통계 (디버깅용)
         self.stats = {

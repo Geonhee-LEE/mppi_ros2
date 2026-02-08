@@ -304,6 +304,12 @@ class GaussianProcessTrainer:
         if verbose:
             print(f"\nGP training completed for all {self.state_dim} dimensions")
 
+        # Set eval mode for inference after training
+        for model in self.gp_models:
+            model.eval()
+        for likelihood in self.likelihoods:
+            likelihood.eval()
+
         # Compute overall validation loss
         self._compute_validation_loss(val_x, val_y)
 
@@ -355,12 +361,6 @@ class GaussianProcessTrainer:
             mean: (nx,) or (batch, nx)
             std: (nx,) or (batch, nx) if return_uncertainty=True
         """
-        # Set to eval mode
-        for model in self.gp_models:
-            model.eval()
-        for likelihood in self.likelihoods:
-            likelihood.eval()
-
         # Normalize inputs
         if self.norm_stats is not None:
             state_norm = (state - self.norm_stats["state_mean"]) / self.norm_stats["state_std"]

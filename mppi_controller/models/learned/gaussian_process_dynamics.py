@@ -125,12 +125,6 @@ class GaussianProcessDynamics(RobotModel):
         if self.gp_models is None:
             raise RuntimeError("Models not loaded. Call load_model() first.")
 
-        # Set to eval mode
-        for model in self.gp_models:
-            model.eval()
-        for likelihood in self.likelihoods:
-            likelihood.eval()
-
         # Normalize inputs
         if self.norm_stats is not None:
             state_norm = (state - self.norm_stats["state_mean"]) / self.norm_stats["state_std"]
@@ -274,6 +268,15 @@ class GaussianProcessDynamics(RobotModel):
             )
         except FileNotFoundError:
             raise FileNotFoundError(f"Model file not found: {model_path}")
+
+    def _set_eval_mode(self):
+        """Set all GP models and likelihoods to eval mode (called once after load)"""
+        if self.gp_models is not None:
+            for model in self.gp_models:
+                model.eval()
+        if self.likelihoods is not None:
+            for likelihood in self.likelihoods:
+                likelihood.eval()
 
     def load_model(self, model_path: str):
         """Load model (public method)"""

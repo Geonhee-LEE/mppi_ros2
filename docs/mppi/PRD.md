@@ -629,9 +629,90 @@ GPU 가속 (선택적, 고성능 시나리오)
 - **ESS**: 0.3 ~ 0.7 범위 유지 (AdaptiveTemperature)
 - **Tube Width**: 외란 환경에서 < 0.5m 유지
 
-## 6. 참고 자료
+## 6. 학습 기반 모델 적응 (Milestone 3.6+)
 
-### 6.1 논문
+### 6.1 현황 및 문제점
+
+Model Mismatch 시나리오(컨트롤러 모델 ≠ 실제 세계)에서 학습 모델의 성능이 기대에 미치지 못하는 문제가 확인됨.
+
+**Dynamic World 설정**: 실제 세계는 5D DifferentialDriveDynamic (마찰 c_v=0.5, c_omega=0.3, PD 제어, 프로세스 노이즈)이나, 컨트롤러는 3D 기구학 모델만 보유.
+
+```
+현재 성능 (circle 20s, --world dynamic):
+
+  Oracle (5D 정확)    ████░░░░░░░░░░░░░░░░  0.022m  ← 이론 상한
+  Dynamic (5D 추정)   █████░░░░░░░░░░░░░░░  0.026m
+  Kinematic (3D)      █████░░░░░░░░░░░░░░░  0.029m  ← 기준선
+  ─────────────────── 목표 라인 ──────────────────────
+  MAML (3D Residual)  ██████████░░░░░░░░░░  0.086m  ✗ 기구학보다 열위
+  Neural (3D E2E)     ███████████░░░░░░░░░  0.096m  ✗
+  Residual (3D)       ████████████████████  0.198m  ✗ 매우 저조
+```
+
+### 6.2 근본 원인 분석
+
+**FR-40: 차원 불일치 (Dimension Mismatch)**
+- 실제 세계는 5D 상태 (x, y, θ, v, ω)를 가지나, 학습 모델은 3D 관측 (x, y, θ)만 수신
+- 관성/속도 상태를 관측하지 못하므로 동역학 잔차를 정확히 근사할 수 없음
+- 이는 Partially Observable 문제이며, 3D 잔차 모델의 이론적 한계
+
+**FR-41: Warmup 오차 누적**
+- 2-Phase 아키텍처의 Phase 1 (40 step, ~2초)은 순수 기구학 → 초기 오차 큼
+- 전체 RMSE에 warmup 구간 오차가 평균으로 반영되어 성능 하락
+- 특히 짧은 시뮬레이션 (10-20초)에서 warmup 비중이 10-20%
+
+**FR-42: FOMAML 근사 한계**
+- 1차 근사 (create_graph=False)로 Hessian 정보 손실
+- inner_steps=100은 실질적으로 fine-tuning에 가까워 메타 학습 이점 약화
+- 적응 후에도 잔차 fitting 정확도가 ~70-80%에 머무름
+
+### 6.3 개선 요구사항
+
+**FR-43: 5D Residual MAML**
+- MAML 모델을 5D state (x, y, θ, v, ω) + 2D control → 5D residual로 확장
+- DynamicKinematicAdapter (5D forward_dynamics)를 base model로 사용
+- 기구학 base가 아닌 동역학 base에서 잔차 학습 → 더 작은 잔차, 더 정확한 보정
+- 검증 기준: MAML RMSE < Kinematic RMSE (0.029m 이하)
+
+**FR-44: 적응형 Warmup**
+- Phase 1 최소화: warmup_steps를 동적으로 조절 (데이터 품질 기반)
+- 이전 에피소드의 적응 결과 재활용 (cold start 방지)
+- 적응 트리거: 고정 주기 대신 오차 급증 시 즉시 재적응
+
+**FR-45: 대안 메타 학습 알고리즘 탐색**
+- Reptile (Nichol et al. 2018): FOMAML보다 안정적, 구현 단순
+- CAVIA (Zintgraf et al. 2019): context vector 기반, 파라미터 전체가 아닌 context만 적응
+- ALPaCA (Harrison et al. 2018): Bayesian linear regression + neural features → 불확실성 포함
+- 검증 기준: 동일 데이터/조건에서 FOMAML 대비 RMSE 30%+ 개선
+
+**FR-46: 오프라인 학습 모델 개선**
+- Neural/Residual 오프라인 모델의 학습 데이터 다양성 부족 해소
+- Domain randomization: c_v ∈ [0.1, 0.8], c_omega ∈ [0.1, 0.5] 범위에서 랜덤 샘플링
+- 다양한 궤적 (circle, figure8, sine, random) + 속도 프로필 조합
+- 검증 기준: Residual RMSE < 0.1m (현재 0.198m → 50%+ 개선)
+
+### 6.4 성능 목표
+
+| 모델 | 현재 RMSE | 목표 RMSE | 개선율 |
+|------|-----------|-----------|--------|
+| MAML (Residual) | 0.086m | < 0.030m | 65%+ |
+| Neural (E2E) | 0.096m | < 0.050m | 48%+ |
+| Residual (Hybrid) | 0.198m | < 0.080m | 60%+ |
+
+### 6.5 리스크
+
+| 리스크 | 영향 | 완화 전략 |
+|--------|------|-----------|
+| 5D MAML 학습 불안정 | 높음 | 학습률 스케줄링, gradient clipping, 단계적 확장 |
+| Full MAML 메모리 폭발 | 중간 | FOMAML 유지하되 inner_steps 최적화, 또는 Reptile |
+| 오프라인 데이터 과적합 | 중간 | Domain randomization, validation split 확대 |
+| Warmup 제거 시 발산 | 높음 | 최소 warmup 보장 (10 step), 발산 감지 fallback |
+
+---
+
+## 7. 참고 자료
+
+### 7.1 논문
 
 **Vanilla MPPI:**
 - Williams et al. (2016) - "Aggressive Driving with Model Predictive Path Integral Control"
@@ -651,19 +732,26 @@ GPU 가속 (선택적, 고성능 시나리오)
 - Bhardwaj et al. (2024, ICRA) - "Spline-MPPI: Continuous-Time Trajectory Optimization via B-Spline Interpolation"
 - Kondo et al. (2024, ICRA) - "SVG-MPPI: Efficient Stein Variational Guidance for MPPI"
 
-### 6.2 오픈소스 참조 구현
+**메타 학습 / 적응 제어:**
+- Finn et al. (2017) - "Model-Agnostic Meta-Learning for Fast Adaptation of Deep Networks" (MAML)
+- Nichol et al. (2018) - "On First-Order Meta-Learning Algorithms" (Reptile, FOMAML)
+- Zintgraf et al. (2019) - "Fast Context Adaptation via Meta-Learning" (CAVIA)
+- Harrison et al. (2018) - "Meta-Learning Priors for Efficient Online Bayesian Regression" (ALPaCA)
+- Nagabandi et al. (2019) - "Learning to Adapt in Dynamic, Real-World Environments through Meta-Reinforcement Learning"
+
+### 7.2 오픈소스 참조 구현
 
 - **pytorch_mppi** - PyTorch GPU 가속 MPPI ([GitHub](https://github.com/UM-ARM-Lab/pytorch_mppi))
 - **mppic** - ROS2 nav2 MPPI Controller C++ 플러그인 ([GitHub](https://github.com/ros-planning/navigation2/tree/main/nav2_mppi_controller))
 - **PythonLinearNonlinearControl** - Python 제어 알고리즘 모음 (MPPI 포함)
 
-### 6.3 ROS2 관련
+### 7.3 ROS2 관련
 
 - **nav2_core::Controller** - nav2 Controller 플러그인 인터페이스
 - **nav2_costmap_2d** - 동적 장애물 맵
 - **visualization_msgs** - RVIZ 마커 메시지
 
-## 7. 개발 우선순위 요약
+## 8. 개발 우선순위 요약
 
 ```
 우선순위 매트릭스:
@@ -697,7 +785,7 @@ GPU 가속 (선택적, 고성능 시나리오)
 10. GPU 가속 (P2) ← 고성능 시나리오
 ```
 
-## 8. 리스크 및 완화 전략
+## 9. 리스크 및 완화 전략
 
 | 리스크 | 영향 | 확률 | 완화 전략 |
 |-------|-----|-----|----------|
@@ -709,7 +797,7 @@ GPU 가속 (선택적, 고성능 시나리오)
 
 ---
 
-**문서 버전:** 1.0
-**최종 업데이트:** 2026-02-07
-**작성자:** Claude Sonnet 4.5
-**상태:** Draft (M1 진행 전)
+**문서 버전:** 1.1
+**최종 업데이트:** 2026-02-18
+**작성자:** Claude Sonnet 4.5 / Claude Opus 4.6
+**상태:** Active (M1~M3.6 완료, MAML 성능 개선 진행 중)

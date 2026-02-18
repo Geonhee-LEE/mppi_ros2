@@ -636,6 +636,85 @@
 
 ---
 
+## 🔬 MAML 성능 개선 (P0) — Known Issue
+
+> **현황**: MAML RMSE 0.086m, Kinematic 0.029m — MAML이 순수 기구학보다 열위
+> **목표**: MAML RMSE < Kinematic RMSE (Oracle 수준 0.022m에 근접)
+
+### 근본 원인 분석
+
+현재 Residual MAML 아키텍처의 한계:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│              현재 MAML 성능 병목 (3가지)                 │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│  1. 차원 불일치 (Dimension Mismatch)                     │
+│     - 실제 세계: 5D (x,y,θ,v,ω) + PD + 마찰            │
+│     - MAML 모델: 3D (x,y,θ) → 잔차 3D                   │
+│     - 관성/속도 상태를 볼 수 없어 정확한 보정 불가       │
+│                                                          │
+│  2. Warmup 페널티 (Phase 1 오차 누적)                    │
+│     - 첫 40 step (~2초) = 순수 기구학 → 큰 초기 오차     │
+│     - 전체 RMSE에 warmup 오차가 평균으로 반영            │
+│     - 20초 시뮬 기준 warmup = 10% 구간                   │
+│                                                          │
+│  3. FOMAML 근사 한계                                     │
+│     - 1차 근사 (create_graph=False) → 곡률 정보 손실     │
+│     - 100 inner step SGD ≈ fine-tuning (메타 이점 약화) │
+│     - 적응 후에도 잔차 fitting 정확도 ~70-80%            │
+│                                                          │
+│  결과: Kinematic(0.029m) > MAML(0.086m) > Neural(0.096m) │
+│        MAML이 Neural보다 약간 나을 뿐, 기구학 못 이김    │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 개선 방향
+
+- [ ] #910 5D Residual MAML 아키텍처
+  * MAML 모델을 5D state + 2D control → 5D residual로 확장
+  * DynamicKinematicAdapter를 base model로 사용
+  * 속도/각속도 상태를 직접 관측하여 관성 보정 가능
+  * 예상 효과: 차원 불일치 해소 → RMSE 50%+ 감소
+
+- [ ] #911 Warmup 최소화 전략
+  * warmup_steps 40 → 20 (최소 데이터로 빠른 적응)
+  * Phase 1에서도 이전 적응 결과 활용 (cold start 방지)
+  * sliding window warmup: 적응 전에도 부분 잔차 보정
+  * 예상 효과: 초기 오차 50% 감소
+
+- [ ] #912 Full MAML (2차 미분) 또는 대안 메타 학습
+  * FOMAML → full MAML: `create_graph=True`, Hessian-vector product
+  * 또는 Reptile (Nichol et al. 2018): 더 간단하고 안정적
+  * 또는 CAVIA (Zintgraf et al. 2019): context parameter 기반
+  * inner_steps 100 → 10~20 (진정한 few-shot, 과적합 방지)
+
+- [ ] #913 온라인 적응 고도화
+  * Exponential weighting: 최근 데이터에 높은 가중치
+  * Multi-step residual prediction: 1-step → rollout 기반 학습
+  * Adaptive adapt_interval: 오차 급증 시 즉시 재적응
+  * GP residual 대안: 소규모 데이터에서 GP가 NN보다 유리
+
+- [ ] #914 Residual (오프라인 NN) 성능 개선
+  * 현재 RMSE 0.198m — 매우 저조
+  * 원인: 오프라인 학습 데이터의 분포 편향 (특정 궤적에만 최적)
+  * 개선: 다양한 궤적/속도 조합으로 데이터 증강
+  * Domain randomization: c_v, c_omega 범위에서 랜덤 샘플링
+
+### 현재 벤치마크 (circle, 20s, --world dynamic)
+
+| 모델 | RMSE (m) | 추론 시간 (ms) | 비고 |
+|------|----------|----------------|------|
+| Oracle (5D, 정확) | 0.022 | 6.1 | 이론적 상한 |
+| Dynamic (5D, 파라미터 틀림) | 0.026 | 6.1 | 구조 아는 경우 |
+| **Kinematic (3D)** | **0.029** | **4.9** | **기준선** |
+| **MAML (3D, Residual)** | **0.086** | **21.4** | **기구학보다 열위** |
+| Neural (3D, E2E) | 0.096 | 32.1 | 오프라인 학습 |
+| Residual (3D, Hybrid) | 0.198 | 23.2 | 오프라인 학습 |
+
+---
+
 ## 🐛 Bug Fixes (P2)
 
 - [ ] #901 각도 정규화 엣지 케이스

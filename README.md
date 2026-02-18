@@ -348,6 +348,47 @@ python examples/learned/gp_vs_neural_comparison_demo.py --all
 python examples/learned/online_learning_demo.py --duration 60.0 --plot
 ```
 
+### Simulation Environments (10 Scenarios)
+
+10 diverse simulation environments showcasing all MPPI variants, safety controllers, and robot models.
+See the full guide at [docs/SIMULATION_ENVIRONMENTS.md](docs/SIMULATION_ENVIRONMENTS.md).
+
+```bash
+# Run ALL 10 scenarios (batch, ~218s)
+PYTHONPATH=. python examples/simulation_environments/run_all.py
+
+# Run specific scenarios
+PYTHONPATH=. python examples/simulation_environments/run_all.py --scenarios s1 s2 s6
+
+# Individual scenarios (with live animation)
+PYTHONPATH=. python examples/simulation_environments/scenarios/static_obstacle_field.py --live
+PYTHONPATH=. python examples/simulation_environments/scenarios/dynamic_bouncing.py --live
+PYTHONPATH=. python examples/simulation_environments/scenarios/chasing_evading.py --live
+PYTHONPATH=. python examples/simulation_environments/scenarios/multi_robot_coordination.py
+PYTHONPATH=. python examples/simulation_environments/scenarios/waypoint_navigation.py
+PYTHONPATH=. python examples/simulation_environments/scenarios/drifting_disturbance.py --noise 0.5
+PYTHONPATH=. python examples/simulation_environments/scenarios/parking_precision.py
+PYTHONPATH=. python examples/simulation_environments/scenarios/racing_mpcc.py
+PYTHONPATH=. python examples/simulation_environments/scenarios/narrow_corridor.py --live
+PYTHONPATH=. python examples/simulation_environments/scenarios/mixed_challenge.py
+
+# Batch mode (no plot window, for CI/testing)
+PYTHONPATH=. python examples/simulation_environments/scenarios/dynamic_bouncing.py --no-plot
+```
+
+| # | Scenario | Controllers | Key Feature |
+|---|----------|-------------|-------------|
+| S1 | Static Obstacle Field | Vanilla / CBF / Shield | Random/slalom/dense obstacle layouts |
+| S2 | Dynamic Bouncing | CBF / C3BF / Shield | Velocity-aware barrier (5-tuple obstacles) |
+| S3 | Chasing Evader | Shield / DPCBF / CBF | Predator pursuit with directional CBF |
+| S4 | Multi-Robot Coordination | 4-way CBF | 4 robots swap positions (pairwise CBF) |
+| S5 | Waypoint Navigation | Vanilla / CBF | WaypointStateMachine with dwell times |
+| S6 | Drifting Disturbance | Vanilla / Tube / Risk-Aware | Process noise robustness comparison |
+| S7 | Parking Precision | 3 MPPI configs | Ackermann + SuperellipsoidCost |
+| S8 | Racing MPCC | MPCC / Tracking | Contouring/lag error decomposition |
+| S9 | Narrow Corridor | CBF / Shield / Aggressive | Tight L-shaped passages + funnel |
+| S10 | Mixed Challenge | Shield-MPPI | Static + dynamic + corridor combined |
+
 ---
 
 ## Results Gallery
@@ -549,6 +590,10 @@ mppi_ros2/
 │
 ├── tests/                          # Unit tests (319 tests, 26 files)
 ├── examples/                       # Demo scripts
+│   └── simulation_environments/    # 10 simulation scenarios
+│       ├── common/                 # Shared infrastructure (ABC, obstacles, visualizer)
+│       ├── scenarios/              # S1~S10 scenario scripts
+│       └── run_all.py              # Batch runner + summary
 ├── plots/                          # Result plots
 ├── docs/                           # Documentation
 └── configs/                        # Configuration files
@@ -651,6 +696,7 @@ ros2 launch mppi_ros2 mppi_sim.launch.py model_type:=dynamic
 - [Safety-Critical Control Guide](docs/safety/SAFETY_CRITICAL_CONTROL.md)
 - [Learned Models Guide](docs/learned_models/LEARNED_MODELS_GUIDE.md)
 - [Online Learning Guide](docs/learned_models/ONLINE_LEARNING.md)
+- [Simulation Environments Guide](docs/SIMULATION_ENVIRONMENTS.md)
 - [CLAUDE Development Guide](CLAUDE.md)
 
 ## References
@@ -685,6 +731,7 @@ ros2 launch mppi_ros2 mppi_sim.launch.py model_type:=dynamic
 - [x] Learning pipeline (NN/GP/Residual/Ensemble/MC-Dropout)
 - [x] Online learning with checkpoint versioning
 - [x] 319 unit tests (26 files)
+- [x] 10 simulation environments (static/dynamic/multi-robot/parking/racing/corridor)
 
 ### In Progress
 - [ ] ROS2 nav2 Controller plugin

@@ -17,13 +17,14 @@
 
 ## 개요
 
-MPPI ROS2는 **5가지 학습 기반 동역학 모델**을 지원합니다:
+MPPI ROS2는 **6가지 학습 기반 동역학 모델**을 지원합니다:
 
 1. **Neural Dynamics**: 심층 신경망 기반 end-to-end 학습
 2. **Gaussian Process Dynamics**: 베이지안 비모수 모델, 불확실성 정량화
 3. **Residual Dynamics**: 물리 모델 + 학습 보정 (하이브리드)
 4. **Ensemble Neural Dynamics**: M개 MLP 앙상블, 분산 기반 불확실성
 5. **MC-Dropout Dynamics**: 추론 시 dropout으로 베이지안 근사
+6. **MAML Dynamics**: 메타 학습 기반 few-shot 실시간 적응
 
 ### 핵심 특징
 
@@ -34,6 +35,7 @@ MPPI ROS2는 **5가지 학습 기반 동역학 모델**을 지원합니다:
 - **불확실성 인식 비용**: `UncertaintyAwareCost`로 Risk-Aware MPPI 연동
 - **모델 검증**: `ModelValidator`로 RMSE/MAE/R² 통합 평가
 - **Sim-to-Real 전이**: 도메인 적응 지원
+- **메타 학습**: MAML 기반 few-shot 실시간 적응 ([META_LEARNING.md](./META_LEARNING.md) 참조)
 - **GPU 가속**: `TorchNeuralDynamics`로 MPPI 루프 내 GPU 추론
 
 ---
@@ -172,6 +174,49 @@ model = MCDropoutDynamics(
 )
 mean, std = model.predict_with_uncertainty(state, control)
 ```
+
+### 6. MAML Dynamics
+
+**특징**:
+- FOMAML (First-Order MAML) 기반 메타 학습
+- 다양한 환경에서 사전 학습된 메타 파라미터
+- 실행 중 few-shot (20~50개 데이터) 적응
+- 매 적응마다 메타 파라미터에서 시작 (안정적)
+
+**장점**:
+- 빠른 적응 (SGD 100 step, ~10ms)
+- 환경 변화에 즉시 대응 (마찰, 관성, 하중 등)
+- 누적 드리프트 없음 (매번 메타 파라미터 기준)
+- 3D 상태만으로 5D 환경 적응 가능
+
+**단점**:
+- 메타 학습에 다양한 환경 시뮬레이션 필요
+- 메타 학습 시간 (~5분)
+- 태스크 분포 밖 환경에서는 적응 한계
+
+**사용 사례**:
+- 환경이 자주 변하는 로봇 (다른 바닥, 하중 변화 등)
+- Sim-to-Real 빠른 적응
+- 오프라인 Neural/Residual이 성능 부족한 경우
+
+```python
+from mppi_controller.models.learned.maml_dynamics import MAMLDynamics
+from mppi_controller.models.learned.residual_dynamics import ResidualDynamics
+
+# Residual MAML: 기구학 base + MAML 잔차 (권장 아키텍처)
+maml = MAMLDynamics(
+    state_dim=3, control_dim=2,
+    model_path="models/learned_models/dynamic_maml_meta_model.pth",
+    inner_lr=0.005, inner_steps=100,
+)
+maml.save_meta_weights()
+
+# 잔차 적응 후 ResidualDynamics로 사용
+maml.adapt(states, controls, residual_targets, dt=0.05, restore=True)
+residual_model = ResidualDynamics(base_model=kinematic, learned_model=maml, use_residual=True)
+```
+
+자세한 내용은 [META_LEARNING.md](./META_LEARNING.md)를 참조하세요.
 
 ---
 
@@ -484,6 +529,7 @@ controller = MPPIController(model=residual_model, params=params)
 | Residual | 2,000-3,000 샘플 | ~3분 | 0.2ms | 선택적 |
 | Ensemble (M=5) | 5,000+ 샘플 | ~25분 (5x) | 0.5ms | 중간 품질 |
 | MC-Dropout (M=20) | 5,000+ 샘플 | ~5분 (1x) | 2ms | 낮은 품질 |
+| **MAML** | **40~200 (적응)** | **~5분 (메타)** | **~10ms (적응)** | **없음** |
 
 ### 정확도 비교 (Differential Drive 예시)
 
@@ -529,6 +575,14 @@ controller = MPPIController(model=residual_model, params=params)
 - ✅ 외삽 영역에서 안정성 필요
 - ❌ 물리 모델 없음
 - ❌ 물리 모델이 매우 정확함 (학습 불필요)
+
+#### MAML Dynamics를 선택하세요:
+- ✅ 환경이 자주 변함 (다른 바닥, 하중, 마모 등)
+- ✅ 빠른 적응 필요 (수초 이내)
+- ✅ 오프라인으로 다양한 환경 시뮬레이션 가능
+- ✅ Neural/Residual 오프라인 학습으로 부족할 때
+- ❌ 환경이 고정적 (오프라인 학습 충분)
+- ❌ 메타 학습용 환경 시뮬레이션 불가
 
 ---
 
@@ -930,6 +984,42 @@ class MCDropoutDynamics(RobotModel):
         """(MC 평균, MC 표준편차) 반환"""
 ```
 
+### MAMLDynamics
+
+```python
+class MAMLDynamics(NeuralDynamics):
+    def __init__(
+        self,
+        state_dim: int,
+        control_dim: int,
+        model_path: Optional[str] = None,
+        device: str = "cpu",
+        inner_lr: float = 0.01,
+        inner_steps: int = 5,
+        use_adam: bool = False,   # True → Adam, False → SGD
+    )
+
+    def save_meta_weights(self):
+        """메타 파라미터 스냅샷 저장"""
+
+    def restore_meta_weights(self):
+        """메타 파라미터로 복원"""
+
+    def adapt(
+        self,
+        states: np.ndarray,       # (M, nx)
+        controls: np.ndarray,     # (M, nu)
+        next_states: np.ndarray,  # (M, nx)
+        dt: float,
+        restore: bool = True,     # True → 메타 파라미터 복원 후 적응
+                                  # False → 현재 파라미터에서 계속 fine-tune
+    ) -> float:
+        """Few-shot 적응 → 최종 loss 반환"""
+
+    def forward_dynamics(self, state, control) -> np.ndarray:
+        """적응된 모델로 예측 (NeuralDynamics 상속)"""
+```
+
 ### OnlineLearner
 
 ```python
@@ -990,6 +1080,18 @@ python examples/learned/online_learning_demo.py \
     --plot
 ```
 
+### MAML 6-Way 비교 (Dynamic World)
+
+```bash
+# 전체 파이프라인 (데이터 수집 + 학습 + 메타 학습 + 6-Way 평가)
+python examples/comparison/model_mismatch_comparison_demo.py \
+    --all --world dynamic --trajectory circle --duration 20
+
+# 실시간 비교 (메타 모델 사전 학습 필요)
+python examples/comparison/model_mismatch_comparison_demo.py \
+    --live --world dynamic --trajectory circle --duration 20
+```
+
 ---
 
 ## 참고 자료
@@ -999,6 +1101,8 @@ python examples/learned/online_learning_demo.py \
 - Deisenroth et al. (2015) - "Gaussian Processes for Data-Efficient Learning"
 - Hewing et al. (2020) - "Learning-Based MPC: A Review"
 - Cheng et al. (2019) - "End-to-End Safe RL with GP"
+- Finn et al. (2017) - "Model-Agnostic Meta-Learning for Fast Adaptation" (MAML)
+- Nichol et al. (2018) - "On First-Order Meta-Learning Algorithms" (FOMAML)
 
 ### 라이브러리
 - PyTorch: https://pytorch.org
@@ -1036,5 +1140,5 @@ python examples/learned/online_learning_demo.py \
 
 ---
 
-**마지막 업데이트**: 2026-02-08
+**마지막 업데이트**: 2026-02-18
 **작성자**: Claude Sonnet 4.5 + Claude Opus 4.6 + Geonhee LEE

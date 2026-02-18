@@ -12,19 +12,20 @@ Model Mismatch Comparison Demo
     3. Residual (Hybrid): 기구학 + NN 보정 — 물리+데이터 융합
     4. Oracle (Perfect): 섭동 동역학 — 이론적 상한
 
-  --world dynamic: DifferentialDriveDynamic(5D) 세계 → 5-Way 비교
+  --world dynamic: DifferentialDriveDynamic(5D) 세계 → 6-Way 비교
     1. Kinematic (3D): 관성/마찰 모름
     2. Neural (3D): 데이터에서 전체 학습
     3. Residual (3D): 물리+데이터 융합
     4. Dynamic (5D): 구조 알지만 파라미터 틀림 (c_v=0.1 vs 실제 0.5)
-    5. Oracle (5D): 정확한 파라미터
+    5. MAML (3D): FOMAML 메타 학습 + 실시간 few-shot 적응
+    6. Oracle (5D): 정확한 파라미터
 
 Usage:
     # Perturbed world (기본, 4-way)
     python model_mismatch_comparison_demo.py --all
     python model_mismatch_comparison_demo.py --live --trajectory circle --duration 20
 
-    # Dynamic world (5-way)
+    # Dynamic world (6-way)
     python model_mismatch_comparison_demo.py --all --world dynamic --trajectory circle --duration 20
     python model_mismatch_comparison_demo.py --live --world dynamic --trajectory circle --duration 20
 """
@@ -47,6 +48,8 @@ from mppi_controller.models.dynamic.differential_drive_dynamic import (
 from mppi_controller.models.base_model import RobotModel
 from mppi_controller.models.learned.neural_dynamics import NeuralDynamics
 from mppi_controller.models.learned.residual_dynamics import ResidualDynamics
+from mppi_controller.models.learned.maml_dynamics import MAMLDynamics
+from mppi_controller.learning.maml_trainer import MAMLTrainer
 from mppi_controller.controllers.mppi.mppi_params import MPPIParams
 from mppi_controller.controllers.mppi.base_mppi import MPPIController
 from mppi_controller.controllers.mppi.cost_functions import (
@@ -78,6 +81,7 @@ RESIDUAL_MODEL_FILE = "mismatch_residual_model.pth"
 DYNAMIC_DATA_FILE = "dynamic_mismatch_data.pkl"
 DYNAMIC_NEURAL_MODEL_FILE = "dynamic_neural_model.pth"
 DYNAMIC_RESIDUAL_MODEL_FILE = "dynamic_residual_model.pth"
+DYNAMIC_MAML_MODEL_FILE = "dynamic_maml_meta_model.pth"
 
 # ==================== 섭동 파라미터 ====================
 # 강한 미스매치: 실제 로봇의 바닥 마찰 + 모터 바이어스 + 비대칭 마찰
@@ -789,6 +793,146 @@ def train_models(args):
     print(f"    Residual: {os.path.join(MODEL_DIR, residual_file)}")
 
 
+# ==================== Stage 2b: MAML 메타 학습 ====================
+
+def meta_train_maml(args):
+    """MAML 메타 학습 (다양한 DynamicWorld 설정으로 학습)."""
+    print("\n" + "=" * 80)
+    print("Stage 2b: MAML Meta-Training".center(80))
+    print("=" * 80)
+
+    trainer = MAMLTrainer(
+        state_dim=3, control_dim=2,
+        hidden_dims=[128, 128],
+        inner_lr=0.005, inner_steps=10,
+        meta_lr=5e-4,
+        task_batch_size=8,
+        support_size=100,
+        query_size=100,
+        device="cpu",
+        save_dir=MODEL_DIR,
+    )
+    trainer.meta_train(n_iterations=1000, verbose=True)
+    trainer.save_meta_model(DYNAMIC_MAML_MODEL_FILE)
+
+
+def run_with_dynamic_world_maml(_, maml_model, world, params,
+                                 trajectory_fn, duration, seed,
+                                 warmup_steps=40, adapt_interval=80,
+                                 buffer_size=200):
+    """
+    MAML 컨트롤러 전용 시뮬 루프 — ResidualDynamics + MAML 온라인 적응.
+
+    Phase 1 (warm-up, ~2초): 기구학 모델로 제어 + 데이터 수집
+    Phase 2 (adapted): ResidualDynamics(kinematic + MAML residual)로 전환,
+                        주기적으로 MAML residual을 메타에서 재적응
+
+    핵심: 기구학이 base dynamics 제공 → 안정성 보장,
+          MAML은 잔차(마찰/관성 보정)만 학습 → 빠른 적응.
+    """
+    from collections import deque
+
+    np.random.seed(seed)
+
+    # 기구학 모델 (base)
+    base_model = DifferentialDriveKinematic(v_max=1.0, omega_max=1.0)
+    cost_fn = create_angle_aware_cost(params)
+
+    # Phase 1: 기구학 컨트롤러
+    kin_controller = MPPIController(base_model, params, cost_function=cost_fn)
+
+    # Phase 2: ResidualDynamics(kinematic + MAML)
+    residual_model = ResidualDynamics(
+        base_model=base_model,
+        learned_model=maml_model,
+        use_residual=True,
+    )
+    maml_residual_controller = MPPIController(residual_model, params, cost_function=cost_fn)
+
+    state_3d = trajectory_fn(0.0)[:3].copy()
+    world.reset(state_3d)
+    state = state_3d.copy()
+
+    t = 0.0
+    dt = params.dt
+    num_steps = int(duration / dt)
+
+    history = {
+        "time": [],
+        "state": [],
+        "control": [],
+        "reference": [],
+        "solve_time": [],
+    }
+
+    buffer_states = deque(maxlen=buffer_size)
+    buffer_controls = deque(maxlen=buffer_size)
+    buffer_next = deque(maxlen=buffer_size)
+    adapted = False
+
+    for step_i in range(num_steps):
+        ref_3d = generate_reference_trajectory(trajectory_fn, t, params.N, dt)
+
+        t_start = time.time()
+        if not adapted:
+            control, info = kin_controller.compute_control(state, ref_3d)
+        else:
+            control, info = maml_residual_controller.compute_control(state, ref_3d)
+        solve_time = time.time() - t_start
+
+        history["time"].append(t)
+        history["state"].append(state.copy())
+        history["control"].append(control.copy())
+        history["reference"].append(ref_3d[0].copy())
+        history["solve_time"].append(solve_time)
+
+        obs_3d = world.step(control, dt, add_noise=True)
+
+        buffer_states.append(state.copy())
+        buffer_controls.append(control.copy())
+        buffer_next.append(obs_3d.copy())
+
+        # Phase 1→2 전환: 잔차 학습
+        if not adapted and step_i >= warmup_steps:
+            buf_s = np.array(buffer_states)
+            buf_c = np.array(buffer_controls)
+            buf_n = np.array(buffer_next)
+
+            # 잔차 target: actual_next - kinematic_next
+            kin_dots = np.array([
+                base_model.forward_dynamics(s, c) for s, c in zip(buf_s, buf_c)
+            ])
+            kin_next = buf_s + kin_dots * dt
+            # MAML target: (residual_next - state) / dt = residual_dot
+            # residual_next = actual_next - kin_dot * dt  (state cancels)
+            # We need target state such that (target - state)/dt = residual_dot
+            residual_target = buf_s + (buf_n - kin_next)
+
+            maml_model.adapt(buf_s, buf_c, residual_target, dt, restore=True)
+            maml_residual_controller.reset()
+            adapted = True
+
+        # Phase 2: 주기적 잔차 재적응
+        elif adapted and step_i % adapt_interval == 0:
+            buf_s = np.array(buffer_states)
+            buf_c = np.array(buffer_controls)
+            buf_n = np.array(buffer_next)
+            kin_dots = np.array([
+                base_model.forward_dynamics(s, c) for s, c in zip(buf_s, buf_c)
+            ])
+            kin_next = buf_s + kin_dots * dt
+            residual_target = buf_s + (buf_n - kin_next)
+            maml_model.adapt(buf_s, buf_c, residual_target, dt, restore=True)
+
+        state = obs_3d.copy()
+        t += dt
+
+    for key in history:
+        history[key] = np.array(history[key])
+
+    return history
+
+
 # ==================== Stage 3: 평가 ====================
 
 def evaluate(args):
@@ -796,7 +940,7 @@ def evaluate(args):
     world_type = getattr(args, "world", "perturbed")
     use_dynamic = (world_type == "dynamic")
 
-    n_controllers = 5 if use_dynamic else 4
+    n_controllers = 6 if use_dynamic else 4
     print("\n" + "=" * 80)
     print(f"Stage 3: Evaluation ({n_controllers}-Way Comparison, {world_type})".center(80))
     print("=" * 80)
@@ -880,8 +1024,27 @@ def evaluate(args):
         all_metrics["Dynamic"] = compute_metrics(all_histories["Dynamic"])
         print(f"        RMSE: {all_metrics['Dynamic']['position_rmse']:.4f}m")
 
-        # 5. Oracle (5D, 정확한 파라미터)
-        print(f"  [5/{n_controllers}] Oracle (5D, exact params: c_v=0.5)...")
+        # 5. MAML (3D, Residual MAML 적응)
+        maml_path = os.path.join(MODEL_DIR, DYNAMIC_MAML_MODEL_FILE)
+        if os.path.exists(maml_path):
+            print(f"  [5/{n_controllers}] MAML (Residual-Adaptive, 3D)...")
+            maml_model = MAMLDynamics(
+                state_dim=3, control_dim=2,
+                model_path=maml_path, inner_lr=0.005, inner_steps=100,
+            )
+            maml_model.save_meta_weights()
+            world_maml = DynamicWorld(**DYNAMIC_WORLD_PARAMS)
+            all_histories["MAML"] = run_with_dynamic_world_maml(
+                None, maml_model, world_maml, params_3d,
+                trajectory_fn, args.duration, args.seed,
+            )
+            all_metrics["MAML"] = compute_metrics(all_histories["MAML"])
+            print(f"        RMSE: {all_metrics['MAML']['position_rmse']:.4f}m")
+        else:
+            print(f"  [5/{n_controllers}] MAML — SKIPPED (no meta model, run --meta-train)")
+
+        # 6. Oracle (5D, 정확한 파라미터)
+        print(f"  [6/{n_controllers}] Oracle (5D, exact params: c_v=0.5)...")
         oracle_model = DynamicKinematicAdapter(
             c_v=DYNAMIC_WORLD_PARAMS["c_v"],
             c_omega=DYNAMIC_WORLD_PARAMS["c_omega"],
@@ -896,7 +1059,10 @@ def evaluate(args):
         all_metrics["Oracle"] = compute_metrics(all_histories["Oracle"])
         print(f"        RMSE: {all_metrics['Oracle']['position_rmse']:.4f}m")
 
-        label_order = ["Kinematic", "Neural", "Residual", "Dynamic", "Oracle"]
+        label_order = ["Kinematic", "Neural", "Residual", "Dynamic"]
+        if "MAML" in all_histories:
+            label_order.append("MAML")
+        label_order.append("Oracle")
 
     else:
         # ---- Perturbed World: 4-Way 비교 (기존 로직) ----
@@ -962,7 +1128,7 @@ def evaluate(args):
         print(f"    {i+1}. {label}: {rmse:.4f}m{marker}")
 
     if use_dynamic:
-        print("\n  Expected: Oracle < Residual ~ Dynamic < Neural << Kinematic")
+        print("\n  Expected: Oracle < MAML ~ Dynamic < Kinematic < Residual << Neural")
     else:
         print("\n  Expected: Oracle < Residual <= Neural << Kinematic")
 
@@ -979,6 +1145,7 @@ COLORS = {
     "Neural": "#3498db",       # blue
     "Residual": "#2ecc71",     # green
     "Dynamic": "#e67e22",      # orange
+    "MAML": "#00bcd4",         # cyan
     "Oracle": "#9b59b6",       # purple
     "Reference": "#7f8c8d",    # gray
 }
@@ -1140,14 +1307,15 @@ def run_live_comparison(args):
     XY 궤적, 위치 오차, 제어 입력, RMSE 바 차트를 실시간 갱신.
 
     --world perturbed: 4-Way (Kinematic/Neural/Residual/Oracle)
-    --world dynamic:   5-Way (Kinematic/Neural/Residual/Dynamic/Oracle)
+    --world dynamic:   6-Way (Kinematic/Neural/Residual/Dynamic/MAML/Oracle)
     """
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
+    from collections import deque
 
     world_type = getattr(args, "world", "perturbed")
     use_dynamic = (world_type == "dynamic")
-    n_way = 5 if use_dynamic else 4
+    n_way = 6 if use_dynamic else 4
 
     print("\n" + "=" * 80)
     print(f"Live Comparison ({n_way}-Way, {world_type}, Real-Time)".center(80))
@@ -1206,6 +1374,22 @@ def run_live_comparison(args):
         is_5d_map["Dynamic"] = True
         params_map["Dynamic"] = params_5d
 
+        # MAML (3D, few-shot 적응)
+        maml_path = os.path.join(MODEL_DIR, DYNAMIC_MAML_MODEL_FILE)
+        maml_model_live = None
+        if not os.path.exists(maml_path):
+            print(f"\n  MAML meta model not found — auto-running meta-train...")
+            meta_train_maml(args)
+        if os.path.exists(maml_path):
+            maml_model_live = MAMLDynamics(
+                state_dim=3, control_dim=2,
+                model_path=maml_path, inner_lr=0.01, inner_steps=5,
+            )
+            maml_model_live.save_meta_weights()
+            controllers["MAML"] = MPPIController(maml_model_live, params_3d, cost_function=cost_fn_3d)
+            is_5d_map["MAML"] = False
+            params_map["MAML"] = params_3d
+
         oracle_model = DynamicKinematicAdapter(
             c_v=DYNAMIC_WORLD_PARAMS["c_v"],
             c_omega=DYNAMIC_WORLD_PARAMS["c_omega"],
@@ -1243,6 +1427,11 @@ def run_live_comparison(args):
 
     for ctrl in controllers.values():
         ctrl.reset()
+
+    # MAML adaptation buffers
+    maml_buffer_states = deque(maxlen=50)
+    maml_buffer_controls = deque(maxlen=50)
+    maml_buffer_next = deque(maxlen=50)
 
     data = {
         n: {"xy": [], "times": [], "errors": [], "controls_v": [], "solve_times": []}
@@ -1329,6 +1518,15 @@ def run_live_comparison(args):
             ref_3d = generate_reference_trajectory(trajectory_fn, t_current, p.N, dt)
             ref = make_5d_reference(ref_3d) if is_5d_map[name] else ref_3d
 
+            # MAML: 적응 버퍼 충분하면 제어 전에 adapt
+            if name == "MAML" and maml_model_live is not None:
+                if frame > 0 and frame % 10 == 0 and len(maml_buffer_states) >= 20:
+                    maml_model_live.adapt(
+                        np.array(maml_buffer_states),
+                        np.array(maml_buffer_controls),
+                        np.array(maml_buffer_next), dt
+                    )
+
             t_start = time.time()
             control, info = controllers[name].compute_control(states[name], ref)
             solve_time = time.time() - t_start
@@ -1352,6 +1550,12 @@ def run_live_comparison(args):
                     states[name] = worlds[name].get_full_state()
                 else:
                     states[name] = obs_3d.copy()
+
+                # MAML: 전이 데이터 버퍼에 기록
+                if name == "MAML" and maml_model_live is not None:
+                    maml_buffer_states.append(state_3d.copy())
+                    maml_buffer_controls.append(control.copy())
+                    maml_buffer_next.append(obs_3d.copy())
             else:
                 next_state = perturbed_step(states[name], control, base_model, dt, add_noise=True)
                 states[name] = next_state
@@ -1427,7 +1631,7 @@ Examples:
   python model_mismatch_comparison_demo.py --all
   python model_mismatch_comparison_demo.py --live --trajectory circle --duration 20
 
-  # Dynamic world (5-way: Kinematic/Neural/Residual/Dynamic/Oracle)
+  # Dynamic world (6-way: Kinematic/Neural/Residual/Dynamic/MAML/Oracle)
   python model_mismatch_comparison_demo.py --all --world dynamic --trajectory circle --duration 20
   python model_mismatch_comparison_demo.py --live --world dynamic --trajectory circle --duration 20
         """,
@@ -1435,12 +1639,13 @@ Examples:
     parser.add_argument("--collect-data", action="store_true", help="Stage 1: Collect training data")
     parser.add_argument("--train", action="store_true", help="Stage 2: Train neural/residual models")
     parser.add_argument("--evaluate", action="store_true", help="Stage 3: Run evaluation")
+    parser.add_argument("--meta-train", action="store_true", help="Stage 2b: MAML meta-training (dynamic world only)")
     parser.add_argument("--live", action="store_true", help="Live real-time comparison visualization")
     parser.add_argument("--all", action="store_true", help="Run all stages (collect-data + train + evaluate)")
     parser.add_argument(
         "--world", type=str, default="perturbed",
         choices=["perturbed", "dynamic"],
-        help="World type: perturbed (4-way) or dynamic (5-way with DifferentialDriveDynamic) (default: perturbed)",
+        help="World type: perturbed (4-way) or dynamic (6-way with DifferentialDriveDynamic) (default: perturbed)",
     )
     parser.add_argument(
         "--trajectory", type=str, default="circle",
@@ -1457,19 +1662,21 @@ Examples:
         args.collect_data = True
         args.train = True
         args.evaluate = True
+        if args.world == "dynamic":
+            args.meta_train = True
 
     # 아무 옵션도 없으면 도움말 출력
-    if not (args.collect_data or args.train or args.evaluate or args.live):
+    if not (args.collect_data or args.train or args.evaluate or args.live or args.meta_train):
         parser.print_help()
         return
 
-    n_way = 5 if args.world == "dynamic" else 4
+    n_way = 6 if args.world == "dynamic" else 4
     print("\n" + "#" * 80)
     print("#" + f"Model Mismatch Comparison Demo ({n_way}-Way, {args.world})".center(78) + "#")
     print("#" * 80)
     if args.world == "dynamic":
         print(f"\n  Dynamic world: DifferentialDriveDynamic (5D, inertia+friction)")
-        print(f"  5-way comparison: Kinematic / Neural / Residual / Dynamic / Oracle")
+        print(f"  6-way comparison: Kinematic / Neural / Residual / Dynamic / MAML / Oracle")
     else:
         print(f"\n  Perturbed world: kinematic + friction, bias, noise")
         print(f"  4-way comparison: Kinematic / Neural / Residual / Oracle")
@@ -1480,6 +1687,9 @@ Examples:
 
     if args.train:
         train_models(args)
+
+    if args.meta_train:
+        meta_train_maml(args)
 
     if args.evaluate:
         evaluate(args)

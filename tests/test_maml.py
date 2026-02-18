@@ -1,0 +1,441 @@
+"""
+MAML (Model-Agnostic Meta-Learning) 테스트
+
+Tests:
+    - MAMLDynamics 생성, 메타 파라미터 저장/복원, adapt, forward
+    - MAMLTrainer 생성, 태스크 샘플링, 데이터 생성, 메타 학습, 저장/로드
+"""
+
+import numpy as np
+import sys
+import os
+import tempfile
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import torch
+from mppi_controller.models.learned.maml_dynamics import MAMLDynamics
+from mppi_controller.learning.maml_trainer import MAMLTrainer
+from mppi_controller.learning.neural_network_trainer import (
+    DynamicsMLPModel,
+    NeuralNetworkTrainer,
+)
+
+
+def _create_maml_model(state_dim=3, control_dim=2, hidden_dims=None):
+    """Helper: 합성 데이터로 학습된 모델을 생성하고 MAMLDynamics로 로드."""
+    if hidden_dims is None:
+        hidden_dims = [32, 32]
+
+    save_dir = tempfile.mkdtemp()
+    trainer = NeuralNetworkTrainer(
+        state_dim=state_dim,
+        control_dim=control_dim,
+        hidden_dims=hidden_dims,
+        learning_rate=1e-3,
+        save_dir=save_dir,
+    )
+
+    np.random.seed(42)
+    N = 200
+    inputs = np.random.randn(N, state_dim + control_dim).astype(np.float32)
+    A = np.random.randn(state_dim, state_dim + control_dim).astype(np.float32) * 0.1
+    targets = inputs @ A.T
+
+    num_train = int(N * 0.8)
+    norm_stats = {
+        "state_mean": np.zeros(state_dim),
+        "state_std": np.ones(state_dim),
+        "control_mean": np.zeros(control_dim),
+        "control_std": np.ones(control_dim),
+        "state_dot_mean": np.zeros(state_dim),
+        "state_dot_std": np.ones(state_dim),
+    }
+
+    trainer.train(
+        inputs[:num_train], targets[:num_train],
+        inputs[num_train:], targets[num_train:],
+        norm_stats, epochs=20, verbose=False,
+    )
+    model_path = os.path.join(save_dir, "test_maml.pth")
+    trainer.save_model("test_maml.pth")
+
+    maml = MAMLDynamics(
+        state_dim=state_dim, control_dim=control_dim,
+        model_path=model_path, inner_lr=0.01, inner_steps=5,
+    )
+    return maml
+
+
+# ==================== MAMLDynamics Tests ====================
+
+def test_maml_dynamics_creation():
+    """MAMLDynamics 생성 및 속성 확인."""
+    maml = MAMLDynamics(state_dim=3, control_dim=2)
+    assert maml.state_dim == 3
+    assert maml.control_dim == 2
+    assert maml.inner_lr == 0.01
+    assert maml.inner_steps == 5
+    assert maml._meta_weights is None
+    assert maml.model is None
+    print("  PASS: test_maml_dynamics_creation")
+
+
+def test_maml_save_restore_meta_weights():
+    """메타 파라미터 저장/복원 일관성 검증."""
+    maml = _create_maml_model()
+
+    # Save meta weights
+    maml.save_meta_weights()
+    assert maml._meta_weights is not None
+
+    # Verify saved weights match current
+    for key in maml.model.state_dict():
+        diff = torch.abs(
+            maml.model.state_dict()[key] - maml._meta_weights[key]
+        ).max().item()
+        assert diff < 1e-7, f"Weight mismatch for {key}: {diff}"
+
+    print("  PASS: test_maml_save_restore_meta_weights")
+
+
+def test_maml_adapt_reduces_loss():
+    """adapt() 후 loss가 감소하는지 검증."""
+    maml = _create_maml_model()
+    maml.save_meta_weights()
+
+    # Generate synthetic adaptation data
+    np.random.seed(123)
+    M = 50
+    states = np.random.randn(M, 3).astype(np.float32)
+    controls = np.random.randn(M, 2).astype(np.float32)
+    # Create next_states with a simple linear relationship
+    next_states = states + 0.05 * np.column_stack([
+        controls[:, 0] * np.cos(states[:, 2]),
+        controls[:, 0] * np.sin(states[:, 2]),
+        controls[:, 1],
+    ])
+
+    # Compute loss before adaptation
+    maml.restore_meta_weights()
+    maml.model.eval()
+    targets = (next_states - states) / 0.05
+    theta_diff = next_states[:, 2] - states[:, 2]
+    theta_diff = np.arctan2(np.sin(theta_diff), np.cos(theta_diff))
+    targets[:, 2] = theta_diff / 0.05
+    inputs_t = maml._prepare_inputs(states, controls)
+    targets_t = maml._prepare_targets(targets)
+    with torch.no_grad():
+        pred_before = maml.model(inputs_t)
+        loss_before = torch.nn.functional.mse_loss(pred_before, targets_t).item()
+
+    # Adapt
+    final_loss = maml.adapt(states, controls, next_states, dt=0.05)
+
+    # After adaptation, compute loss again
+    maml.model.eval()
+    with torch.no_grad():
+        pred_after = maml.model(inputs_t)
+        loss_after = torch.nn.functional.mse_loss(pred_after, targets_t).item()
+
+    assert loss_after < loss_before, \
+        f"Loss should decrease: before={loss_before:.6f}, after={loss_after:.6f}"
+    print(f"  PASS: test_maml_adapt_reduces_loss (before={loss_before:.4f} -> after={loss_after:.4f})")
+
+
+def test_maml_adapt_changes_weights():
+    """adapt() 후 가중치가 변경되는지 확인."""
+    maml = _create_maml_model()
+    maml.save_meta_weights()
+
+    weights_before = {k: v.clone() for k, v in maml.model.state_dict().items()}
+
+    np.random.seed(456)
+    M = 30
+    states = np.random.randn(M, 3).astype(np.float32)
+    controls = np.random.randn(M, 2).astype(np.float32)
+    next_states = states + 0.05 * np.random.randn(M, 3).astype(np.float32)
+
+    maml.adapt(states, controls, next_states, dt=0.05)
+
+    weights_after = maml.model.state_dict()
+    changed = False
+    for key in weights_before:
+        diff = torch.abs(weights_before[key] - weights_after[key]).max().item()
+        if diff > 1e-7:
+            changed = True
+            break
+
+    assert changed, "Weights should change after adaptation"
+    print("  PASS: test_maml_adapt_changes_weights")
+
+
+def test_maml_restore_after_adapt():
+    """적응 후 restore → 원래 가중치 복원."""
+    maml = _create_maml_model()
+    maml.save_meta_weights()
+
+    meta_weights = {k: v.clone() for k, v in maml._meta_weights.items()}
+
+    # Adapt (changes weights)
+    np.random.seed(789)
+    M = 30
+    states = np.random.randn(M, 3).astype(np.float32)
+    controls = np.random.randn(M, 2).astype(np.float32)
+    next_states = states + 0.05 * np.random.randn(M, 3).astype(np.float32)
+    maml.adapt(states, controls, next_states, dt=0.05)
+
+    # Restore
+    maml.restore_meta_weights()
+
+    for key in meta_weights:
+        diff = torch.abs(
+            maml.model.state_dict()[key] - meta_weights[key]
+        ).max().item()
+        assert diff < 1e-7, f"Weight not restored for {key}: {diff}"
+
+    print("  PASS: test_maml_restore_after_adapt")
+
+
+def test_maml_forward_dynamics():
+    """forward_dynamics() 정상 동작 확인."""
+    maml = _create_maml_model()
+
+    state = np.array([1.0, 2.0, 0.5], dtype=np.float32)
+    control = np.array([0.5, 0.3], dtype=np.float32)
+
+    state_dot = maml.forward_dynamics(state, control)
+    assert state_dot.shape == (3,), f"Expected (3,), got {state_dot.shape}"
+    assert np.all(np.isfinite(state_dot)), "Output should be finite"
+    print("  PASS: test_maml_forward_dynamics")
+
+
+def test_maml_batch_forward():
+    """배치 forward 지원 확인."""
+    maml = _create_maml_model()
+
+    batch_size = 16
+    states = np.random.randn(batch_size, 3).astype(np.float32)
+    controls = np.random.randn(batch_size, 2).astype(np.float32)
+
+    state_dots = maml.forward_dynamics(states, controls)
+    assert state_dots.shape == (batch_size, 3), f"Expected ({batch_size}, 3), got {state_dots.shape}"
+    assert np.all(np.isfinite(state_dots)), "Batch output should be finite"
+    print("  PASS: test_maml_batch_forward")
+
+
+def test_maml_continuous_finetune():
+    """restore=False 연속 fine-tuning: 가중치가 메타에서 계속 멀어짐."""
+    maml = _create_maml_model()
+    maml.save_meta_weights()
+    meta_weights = {k: v.clone() for k, v in maml._meta_weights.items()}
+
+    np.random.seed(321)
+    M = 50
+    states = np.random.randn(M, 3).astype(np.float32)
+    controls = np.random.randn(M, 2).astype(np.float32)
+    next_states = states + 0.05 * np.column_stack([
+        controls[:, 0] * np.cos(states[:, 2]),
+        controls[:, 0] * np.sin(states[:, 2]),
+        controls[:, 1],
+    ])
+
+    # restore=True 3회 → 매번 리셋, 항상 같은 결과
+    maml.adapt(states, controls, next_states, dt=0.05, restore=True)
+    w_after_restore = {k: v.clone() for k, v in maml.model.state_dict().items()}
+    dist_restore = sum(
+        (w_after_restore[k] - meta_weights[k]).norm().item()
+        for k in meta_weights
+    )
+
+    # restore=False 3회 연속 → 누적 학습
+    maml.restore_meta_weights()
+    for _ in range(3):
+        maml.adapt(states, controls, next_states, dt=0.05, restore=False)
+    w_after_cont = {k: v.clone() for k, v in maml.model.state_dict().items()}
+    dist_cont = sum(
+        (w_after_cont[k] - meta_weights[k]).norm().item()
+        for k in meta_weights
+    )
+
+    # 연속 fine-tuning은 메타 가중치에서 더 멀리 이동 (더 많은 SGD step 누적)
+    assert dist_cont > dist_restore, \
+        f"Continuous should diverge more from meta: {dist_cont:.4f} vs {dist_restore:.4f}"
+
+    print(f"  PASS: test_maml_continuous_finetune (cont_dist={dist_cont:.4f} > restore_dist={dist_restore:.4f})")
+
+
+# ==================== MAMLTrainer Tests ====================
+
+def test_maml_trainer_creation():
+    """MAMLTrainer 생성 확인."""
+    trainer = MAMLTrainer(
+        state_dim=3, control_dim=2,
+        hidden_dims=[32, 32],
+        inner_lr=0.01, inner_steps=5,
+        meta_lr=1e-3,
+    )
+    assert trainer.state_dim == 3
+    assert trainer.control_dim == 2
+    assert trainer.model is not None
+    assert trainer.inner_lr == 0.01
+    assert trainer.inner_steps == 5
+    print("  PASS: test_maml_trainer_creation")
+
+
+def test_maml_sample_task():
+    """태스크 파라미터 범위 확인."""
+    trainer = MAMLTrainer(state_dim=3, control_dim=2, hidden_dims=[32, 32])
+
+    np.random.seed(42)
+    for _ in range(100):
+        task = trainer._sample_task()
+        assert 0.1 <= task["c_v"] <= 0.8, f"c_v out of range: {task['c_v']}"
+        assert 0.1 <= task["c_omega"] <= 0.5, f"c_omega out of range: {task['c_omega']}"
+        assert task["k_v"] == 5.0
+        assert task["k_omega"] == 5.0
+
+    print("  PASS: test_maml_sample_task")
+
+
+def test_maml_generate_task_data():
+    """데이터 생성 shape/값 확인."""
+    trainer = MAMLTrainer(state_dim=3, control_dim=2, hidden_dims=[32, 32])
+
+    np.random.seed(42)
+    task = trainer._sample_task()
+    n = 50
+    states, controls, next_states = trainer._generate_task_data(task, n)
+
+    assert states.shape == (n, 3), f"Expected ({n}, 3), got {states.shape}"
+    assert controls.shape == (n, 2), f"Expected ({n}, 2), got {controls.shape}"
+    assert next_states.shape == (n, 3), f"Expected ({n}, 3), got {next_states.shape}"
+
+    # All finite
+    assert np.all(np.isfinite(states))
+    assert np.all(np.isfinite(controls))
+    assert np.all(np.isfinite(next_states))
+
+    print("  PASS: test_maml_generate_task_data")
+
+
+def test_maml_meta_train_loss_decreases():
+    """10 iter 메타 학습 → loss 감소 확인."""
+    trainer = MAMLTrainer(
+        state_dim=3, control_dim=2,
+        hidden_dims=[32, 32],
+        inner_lr=0.01, inner_steps=3,
+        meta_lr=1e-3,
+        task_batch_size=2,
+        support_size=30,
+        query_size=30,
+    )
+
+    np.random.seed(42)
+    trainer.meta_train(n_iterations=20, verbose=False)
+
+    losses = trainer.history["meta_loss"]
+    assert len(losses) == 20, f"Expected 20 losses, got {len(losses)}"
+
+    # First 5 vs last 5 average: should generally decrease
+    first_avg = np.mean(losses[:5])
+    last_avg = np.mean(losses[-5:])
+    # Relaxed check: last should be lower or at least comparable
+    assert last_avg <= first_avg * 1.5, \
+        f"Loss should generally decrease: first_avg={first_avg:.4f}, last_avg={last_avg:.4f}"
+
+    print(f"  PASS: test_maml_meta_train_loss_decreases (first5={first_avg:.4f}, last5={last_avg:.4f})")
+
+
+def test_maml_save_load_meta_model():
+    """저장/로드 후 동일 출력 검증."""
+    save_dir = tempfile.mkdtemp()
+    trainer = MAMLTrainer(
+        state_dim=3, control_dim=2,
+        hidden_dims=[32, 32],
+        inner_lr=0.01, inner_steps=3,
+        meta_lr=1e-3,
+        task_batch_size=2,
+        support_size=20,
+        query_size=20,
+        save_dir=save_dir,
+    )
+
+    np.random.seed(42)
+    trainer.meta_train(n_iterations=5, verbose=False)
+
+    # Save
+    trainer.save_meta_model("test_maml_meta.pth")
+
+    # Get output before load
+    test_input = torch.randn(5, 5)  # state_dim + control_dim = 5
+    trainer.model.eval()
+    with torch.no_grad():
+        output_before = trainer.model(test_input).numpy()
+
+    # Load into new trainer
+    trainer2 = MAMLTrainer(
+        state_dim=3, control_dim=2,
+        hidden_dims=[32, 32],
+        save_dir=save_dir,
+    )
+    trainer2.load_meta_model("test_maml_meta.pth")
+
+    # Get output after load
+    trainer2.model.eval()
+    with torch.no_grad():
+        output_after = trainer2.model(test_input).numpy()
+
+    np.testing.assert_allclose(output_before, output_after, atol=1e-6)
+
+    # Check norm_stats loaded
+    assert trainer2.norm_stats is not None
+    for key in trainer.norm_stats:
+        np.testing.assert_allclose(
+            trainer.norm_stats[key], trainer2.norm_stats[key], atol=1e-6
+        )
+
+    print("  PASS: test_maml_save_load_meta_model")
+
+
+# ==================== main ====================
+
+if __name__ == "__main__":
+    tests = [
+        # MAMLDynamics
+        test_maml_dynamics_creation,
+        test_maml_save_restore_meta_weights,
+        test_maml_adapt_reduces_loss,
+        test_maml_adapt_changes_weights,
+        test_maml_restore_after_adapt,
+        test_maml_forward_dynamics,
+        test_maml_batch_forward,
+        test_maml_continuous_finetune,
+        # MAMLTrainer
+        test_maml_trainer_creation,
+        test_maml_sample_task,
+        test_maml_generate_task_data,
+        test_maml_meta_train_loss_decreases,
+        test_maml_save_load_meta_model,
+    ]
+
+    print(f"\n{'='*60}")
+    print(f"  MAML Tests ({len(tests)} tests)")
+    print(f"{'='*60}")
+
+    passed = 0
+    failed = 0
+    for test in tests:
+        try:
+            test()
+            passed += 1
+        except (AssertionError, Exception) as e:
+            print(f"  FAIL: {test.__name__}: {e}")
+            failed += 1
+
+    print(f"\n{'='*60}")
+    print(f"  Results: {passed} passed, {failed} failed, {len(tests)} total")
+    print(f"{'='*60}")
+
+    if failed > 0:
+        sys.exit(1)

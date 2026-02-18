@@ -157,22 +157,22 @@
 
 ### M2 고급 기능
 
-- [ ] #105 ControlRateCost 비용 함수
+- [x] #105 ControlRateCost 비용 함수 ✓ 2026-02-07
   * cost_functions.py에 ControlRateCost 추가
   * Δu 제어 변화율 비용
   * R_rate 가중치 파라미터
 
-- [ ] #106 Adaptive Temperature
+- [x] #106 Adaptive Temperature ✓ 2026-02-07
   * adaptive_temperature.py - AdaptiveTemperature 클래스
   * ESS (Effective Sample Size) 기반 λ 자동 튜닝
   * 목표 ESS 비율 유지
 
-- [ ] #107 Colored Noise 샘플링
+- [x] #107 Colored Noise 샘플링 ✓ 2026-02-07
   * sampling.py에 ColoredNoiseSampler 추가
   * OU 프로세스 기반 시간 상관 노이즈
   * theta (reversion rate) 파라미터
 
-- [ ] #108 Obstacle 비용 함수
+- [x] #108 Obstacle 비용 함수 ✓ 2026-02-07
   * cost_functions.py에 ObstacleCost 추가
   * 원형 장애물 회피
   * safety_margin 파라미터
@@ -334,10 +334,9 @@
   * 궤적 히스토리 분석
   * 주파수 분석, 제어 스펙트럼 등
 
-- [ ] #306 GIF export 기능
+- [x] #306 GIF export 기능 ✓ 2026-02-07
   * visualizer.py에 export_gif() 추가
-  * mppi_playground 참고
-  * --export-gif 플래그
+  * EnvVisualizer에도 export_gif() 구현
 
 ---
 
@@ -592,41 +591,43 @@
   * CBF vs C3BF vs DPCBF vs Optimal-Decay vs Gatekeeper 5-way 비교
   * 3가지 시나리오: static, crossing, narrow
 
-### Phase S3: 고급 확장 (~300줄)
+### Phase S3: 고급 확장 (~300줄) ✅ 완료
 
-- [ ] #730 Backup CBF (Sensitivity Propagation)
-  * controllers/mppi/backup_cbf.py — BackupCBFFilter
+- [x] #730 Backup CBF (Sensitivity Propagation) ✓ 2026-02-08
+  * controllers/mppi/backup_cbf_filter.py — BackupCBFSafetyFilter
   * 백업 궤적 rollout + 민감도 행렬 전파
   * 현재 제어가 백업 궤적 전체 안전에 미치는 영향 평가
   * multi-constraint QP
-  * Ref: Chen et al. "Backup CBF"
 
-- [ ] #731 Multi-robot CBF
-  * 로봇 간 충돌 회피 제약
+- [x] #731 Multi-robot CBF ✓ 2026-02-08
+  * controllers/mppi/multi_robot_cbf.py
+  * MultiRobotCBFCost (Layer A) + MultiRobotCBFFilter (Layer B)
+  * MultiRobotCoordinator + RobotAgent
   * 다중 MPPI 에이전트 협조 제어
 
-- [ ] #732 MPCC Cost Function
-  * Contouring/Lag 오차 분리
-  * 경로 추종 성능 향상
+- [x] #732 MPCC Cost Function ✓ 2026-02-08
+  * controllers/mppi/mpcc_cost.py
+  * PathParameterization (arc-length) + MPCCCost
+  * Contouring/Lag 오차 분리, 경로 추종 성능 향상
 
 ---
 
 ## 🧪 Additional Robot Models (P2)
 
-- [ ] #801 Swerve Drive 모델
-  * models/kinematic/swerve_drive_kinematic.py
-  * models/dynamic/swerve_drive_dynamic.py
-  * 4륜 독립 조향
+- [x] #801 Swerve Drive 모델 ✓ 2026-02-08
+  * models/kinematic/swerve_drive_kinematic.py — 3D state [x,y,θ], 3D ctrl [vx,vy,ω]
+  * models/dynamic/swerve_drive_dynamic.py — 6D state [x,y,θ,vx,vy,ω], 3D ctrl [ax,ay,α]
+  * GPU: TorchSwerveDriveKinematic, TorchSwerveDriveDynamic
 
 - [ ] #802 Non-coaxial Swerve 모델
   * models/kinematic/non_coaxial_swerve_kinematic.py
   * models/dynamic/non_coaxial_swerve_dynamic.py
   * 비동축 스워브
 
-- [ ] #803 Ackermann 조향 모델
-  * models/kinematic/ackermann_kinematic.py
-  * models/dynamic/ackermann_dynamic.py
-  * 자동차형 로봇
+- [x] #803 Ackermann 조향 모델 ✓ 2026-02-08
+  * models/kinematic/ackermann_kinematic.py — 4D state [x,y,θ,δ], 2D ctrl [v,φ]
+  * models/dynamic/ackermann_dynamic.py — 5D state [x,y,θ,v,δ], 2D ctrl [a,φ]
+  * GPU: TorchAckermannKinematic, TorchAckermannDynamic
 
 - [ ] #804 Omnidirectional 로봇 모델
   * models/kinematic/omnidirectional_kinematic.py
@@ -877,23 +878,52 @@
 | Neural (Learned) | 0.068 | 24.0 | ❌ |
 | Residual (Hybrid) | 0.092 | 31.0 | ❌ |
 
-**다음 단계 (Phase 5)**
+**다음 단계**
 - [ ] ROS2 통합 (nav2 플러그인)
 - [ ] 실제 로봇 테스트
-- [ ] GPU 가속 (CuPy/JAX)
 - [ ] C++ 포팅
+
+#### GPU 가속 (2026-02-08) ✓
+
+- [x] gpu/ 패키지: TorchDiffDriveKinematic, TorchCompositeCost, TorchGaussianSampler
+- [x] base_mppi.py device 분기 (CPU 코드 무수정)
+- [x] RTX 5080: K=4096→4.3x, K=8192→8.1x speedup
+
+#### 로봇 모델 확장 (2026-02-08) ✓
+
+- [x] Ackermann (kinematic + dynamic + GPU)
+- [x] Swerve Drive (kinematic + dynamic + GPU)
+- [x] test_robot_models.py — 69개 테스트
+
+#### Safety S3 고급 확장 (2026-02-08) ✓
+
+- [x] Backup CBF (sensitivity propagation, multi-constraint QP)
+- [x] Multi-robot CBF (Coordinator + RobotAgent, pairwise constraints)
+- [x] MPCC Cost (PathParameterization, contouring/lag decomposition)
+
+#### 학습 시스템 보강 (2026-02-08) ✓
+
+- [x] Ensemble NN, MC-Dropout, UncertaintyAwareCost
+- [x] ModelValidator (RMSE/MAE/R²), 체크포인트 버전 관리
+- [x] 학습 시스템 버그 4건 수정 + 62개 테스트
+
+#### 시뮬레이션 환경 (2026-02-18) ✓
+
+- [x] 10개 시나리오 (S1~S10), 17파일, 4,815줄
+- [x] 공통 인프라: environment ABC, obstacle generators, dynamic obstacles, waypoint FSM
+- [x] 배치 실행: 10P/0F, ~218s
+- [x] 문서: docs/SIMULATION_ENVIRONMENTS.md
 
 #### 종합 통계
 
-**총 구현 코드**: ~10,000+ 라인
-**유닛 테스트**: 43개 (전부 통과 ✅)
+**총 구현 코드**: ~20,000+ 라인
+**유닛 테스트**: 313개 passed (26 파일)
 **MPPI 변형**: 9개 (전부 완성 ✅)
-**모델 타입**: 3개 (Kinematic/Dynamic/Learned)
-**학습 모델**: 3개 (Neural/GP/Residual, 전부 완성 ✅)
-**학습 파이프라인**: 3개 (Neural/GP/Online)
-**모델별 비교**: 4개 (Smooth/SVMPC/Spline/SVG)
-**커밋**: 11개 (M3 SOTA 변형 + 학습 모델)
-**문서**: README, PRD, IMPLEMENTATION_STATUS, TODO, LEARNED_MODELS_GUIDE, ONLINE_LEARNING
+**모델 타입**: 5개 (DiffDrive Kinematic/Dynamic, Ackermann, Swerve, Learned)
+**학습 모델**: 5개 (Neural/GP/Residual/Ensemble/MC-Dropout ✅)
+**안전 제어**: 8개 (CBF/C3BF/DPCBF/OptimalDecay/Shield/Gatekeeper/BackupCBF/MultiRobot ✅)
+**시뮬레이션 환경**: 10개 시나리오 ✅
+**문서**: README, SIMULATION_ENVIRONMENTS, SAFETY_CRITICAL_CONTROL, LEARNED_MODELS_GUIDE 등
 
 ---
 

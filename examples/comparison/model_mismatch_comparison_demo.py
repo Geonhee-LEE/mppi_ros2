@@ -768,12 +768,21 @@ def meta_train_maml(args):
 
 
 def meta_train_maml_5d(args):
-    """5D MAML 메타 학습 (DynamicKinematicAdapter + 5D state)."""
+    """5D MAML 메타 학습 — 잔차(residual) 타겟으로 학습.
+
+    메타 학습 시 base_model(c_v=0.1) 대비 잔차를 타겟으로 사용하여,
+    온라인 적응 시 동일한 잔차 분포에서 적응 가능하게 함.
+    (기존: total dynamics 학습 → residual 적응 = 분포 불일치)
+    """
     meta_algo = getattr(args, "meta_algo", "fomaml")
 
     print("\n" + "=" * 80)
-    print(f"Stage 2c: 5D MAML Meta-Training ({meta_algo})".center(80))
+    print(f"Stage 2c: 5D MAML Meta-Training — Residual ({meta_algo})".center(80))
     print("=" * 80)
+
+    # 잔차 계산용 고정 base model (온라인과 동일)
+    base_5d = DynamicKinematicAdapter(c_v=0.1, c_omega=0.1, k_v=5.0, k_omega=5.0)
+    dt = 0.05
 
     if meta_algo == "reptile":
         from mppi_controller.learning.reptile_trainer import ReptileTrainer
@@ -800,14 +809,28 @@ def meta_train_maml_5d(args):
             save_dir=MODEL_DIR,
         )
 
+    # 데이터 생성을 잔차 타겟으로 오버라이드
+    original_gen = trainer._generate_task_data_5d
+
+    def residual_gen(task_params, n_samples):
+        states, controls, next_states = original_gen(task_params, n_samples)
+        # base model 예측
+        base_dots = base_5d.forward_dynamics(states, controls)
+        base_next = states + base_dots * dt
+        # 잔차 타겟: state + (actual - predicted)
+        residual_next = states + (next_states - base_next)
+        return states, controls, residual_next
+
+    trainer._generate_task_data_5d = residual_gen
+
     trainer.meta_train(n_iterations=1000, verbose=True)
     trainer.save_meta_model(DYNAMIC_MAML_5D_MODEL_FILE)
 
 
 def run_with_dynamic_world_maml(_, maml_model, world, params,
                                  trajectory_fn, duration, seed,
-                                 warmup_steps=40, adapt_interval=80,
-                                 buffer_size=200):
+                                 warmup_steps=20, adapt_interval=20,
+                                 buffer_size=50):
     """
     MAML 컨트롤러 전용 시뮬 루프 — ResidualDynamics + MAML 온라인 적응.
 
@@ -896,7 +919,8 @@ def run_with_dynamic_world_maml(_, maml_model, world, params,
             # We need target state such that (target - state)/dt = residual_dot
             residual_target = buf_s + (buf_n - kin_next)
 
-            maml_model.adapt(buf_s, buf_c, residual_target, dt, restore=True)
+            maml_model.adapt(buf_s, buf_c, residual_target, dt,
+                            restore=True, temporal_decay=0.95)
             maml_residual_controller.reset()
             adapted = True
 
@@ -910,7 +934,8 @@ def run_with_dynamic_world_maml(_, maml_model, world, params,
             ])
             kin_next = buf_s + kin_dots * dt
             residual_target = buf_s + (buf_n - kin_next)
-            maml_model.adapt(buf_s, buf_c, residual_target, dt, restore=True)
+            maml_model.adapt(buf_s, buf_c, residual_target, dt,
+                            restore=True, temporal_decay=0.95)
 
         state = obs_3d.copy()
         t += dt
@@ -923,8 +948,8 @@ def run_with_dynamic_world_maml(_, maml_model, world, params,
 
 def run_with_dynamic_world_maml_5d(maml_model_5d, world, params_5d,
                                     trajectory_fn, duration, seed,
-                                    warmup_steps=20, adapt_interval=40,
-                                    buffer_size=200, error_threshold=0.05):
+                                    warmup_steps=10, adapt_interval=20,
+                                    buffer_size=50, error_threshold=0.15):
     """
     5D MAML 컨트롤러 시뮬 루프 — DynamicKinematicAdapter + 5D MAML residual.
 
@@ -938,11 +963,11 @@ def run_with_dynamic_world_maml_5d(maml_model_5d, world, params_5d,
 
     np.random.seed(seed)
 
-    # 5D base model (잘못된 파라미터)
+    # 5D base model (잘못된 파라미터 — warmup용)
     base_5d = DynamicKinematicAdapter(c_v=0.1, c_omega=0.1, k_v=5.0, k_omega=5.0)
     cost_fn_5d = create_5d_angle_aware_cost(params_5d)
 
-    # Phase 1: DynamicKinematicAdapter 컨트롤러 (wrong params)
+    # Phase 1: DynamicKinematicAdapter 컨트롤러 (wrong params, warmup)
     adapter_controller = MPPIController(base_5d, params_5d, cost_function=cost_fn_5d)
 
     # Phase 2: ResidualDynamics(DynamicKinematicAdapter + MAML-5D)
@@ -1015,7 +1040,7 @@ def run_with_dynamic_world_maml_5d(maml_model_5d, world, params_5d,
             # Residual target: actual - kinematic prediction
             residual_target = buf_s + (buf_n - kin_next)
             maml_model_5d.adapt(buf_s, buf_c, residual_target, dt,
-                                restore=True, temporal_decay=0.99)
+                                restore=True, temporal_decay=0.95)
 
         # Phase 1→2 전환
         if not adapted and step_i >= warmup_steps:
@@ -1649,20 +1674,20 @@ def run_live_comparison(args):
         ctrl.reset()
 
     # MAML adaptation buffers + phase tracking
-    maml_buffer_states = deque(maxlen=200)
-    maml_buffer_controls = deque(maxlen=200)
-    maml_buffer_next = deque(maxlen=200)
-    maml_warmup_steps = 40
-    maml_adapt_interval = 80
+    maml_buffer_states = deque(maxlen=50)
+    maml_buffer_controls = deque(maxlen=50)
+    maml_buffer_next = deque(maxlen=50)
+    maml_warmup_steps = 20
+    maml_adapt_interval = 20
     maml_adapted = [False]  # mutable for closure
     maml_base_model = DifferentialDriveKinematic(v_max=1.0, omega_max=1.0)
 
     # MAML-5D adaptation buffers + phase tracking
-    maml_5d_buffer_states = deque(maxlen=200)
-    maml_5d_buffer_controls = deque(maxlen=200)
-    maml_5d_buffer_next = deque(maxlen=200)
-    maml_5d_warmup_steps = 20
-    maml_5d_adapt_interval = 40
+    maml_5d_buffer_states = deque(maxlen=50)
+    maml_5d_buffer_controls = deque(maxlen=50)
+    maml_5d_buffer_next = deque(maxlen=50)
+    maml_5d_warmup_steps = 10
+    maml_5d_adapt_interval = 20
     maml_5d_adapted = [False]
     maml_5d_base = DynamicKinematicAdapter(c_v=0.1, c_omega=0.1, k_v=5.0, k_omega=5.0)
     maml_5d_recent_errors = deque(maxlen=5)
@@ -1765,7 +1790,7 @@ def run_live_comparison(args):
                     ])
                     kin_next = buf_s + kin_dots * dt
                     residual_target = buf_s + (buf_n - kin_next)
-                    maml_model_live.adapt(buf_s, buf_c, residual_target, dt, restore=True)
+                    maml_model_live.adapt(buf_s, buf_c, residual_target, dt, restore=True, temporal_decay=0.95)
                     controllers["MAML"] = maml_residual_controller
                     maml_residual_controller.reset()
                     maml_adapted[0] = True
@@ -1779,7 +1804,7 @@ def run_live_comparison(args):
                     ])
                     kin_next = buf_s + kin_dots * dt
                     residual_target = buf_s + (buf_n - kin_next)
-                    maml_model_live.adapt(buf_s, buf_c, residual_target, dt, restore=True)
+                    maml_model_live.adapt(buf_s, buf_c, residual_target, dt, restore=True, temporal_decay=0.95)
 
             # MAML-5D: 2-Phase 적응 (5D Residual MAML 아키텍처)
             if name == "MAML-5D" and maml_model_5d_live is not None:
@@ -1790,20 +1815,20 @@ def run_live_comparison(args):
                     kin_dots = maml_5d_base.forward_dynamics(buf_s, buf_c)
                     kin_next = buf_s + kin_dots * dt
                     residual_target = buf_s + (buf_n - kin_next)
-                    maml_model_5d_live.adapt(buf_s, buf_c, residual_target, dt, restore=True)
+                    maml_model_5d_live.adapt(buf_s, buf_c, residual_target, dt, restore=True, temporal_decay=0.95)
                     controllers["MAML-5D"] = maml_5d_residual_controller
                     maml_5d_residual_controller.reset()
                     maml_5d_adapted[0] = True
                 elif maml_5d_adapted[0]:
                     avg_err = np.mean(maml_5d_recent_errors) if maml_5d_recent_errors else 0.0
-                    if frame % maml_5d_adapt_interval == 0 or avg_err > 0.05:
+                    if frame % maml_5d_adapt_interval == 0 or avg_err > 0.15:
                         buf_s = np.array(maml_5d_buffer_states)
                         buf_c = np.array(maml_5d_buffer_controls)
                         buf_n = np.array(maml_5d_buffer_next)
                         kin_dots = maml_5d_base.forward_dynamics(buf_s, buf_c)
                         kin_next = buf_s + kin_dots * dt
                         residual_target = buf_s + (buf_n - kin_next)
-                        maml_model_5d_live.adapt(buf_s, buf_c, residual_target, dt, restore=True)
+                        maml_model_5d_live.adapt(buf_s, buf_c, residual_target, dt, restore=True, temporal_decay=0.95)
 
             t_start = time.time()
             control, info = controllers[name].compute_control(states[name], ref)

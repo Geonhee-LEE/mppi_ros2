@@ -284,6 +284,62 @@ class ObstacleCost(CostFunction):
         return costs
 
 
+class AngleAwareTrackingCost(CostFunction):
+    """
+    상태 추적 비용 + heading angle wrapping.
+
+    heading이 [-π, π]를 넘어 무한히 증가하는 reference와의 차이에서
+    2π 오차가 발생하는 것을 방지. angle_indices의 차원에 대해
+    arctan2로 래핑하여 올바른 비용 계산.
+
+    Args:
+        Q: (nx,) 또는 (nx, nx) 가중치 행렬
+        angle_indices: 각도 래핑할 state 인덱스 (기본: (2,) = θ)
+    """
+
+    def __init__(self, Q: np.ndarray, angle_indices=(2,)):
+        self.Q = Q
+        self.is_diagonal = Q.ndim == 1
+        self.angle_indices = angle_indices
+
+    def compute_cost(self, trajectories, controls, reference_trajectory):
+        errors = trajectories[:, :-1, :] - reference_trajectory[:-1, :]
+        for idx in self.angle_indices:
+            errors[:, :, idx] = np.arctan2(
+                np.sin(errors[:, :, idx]), np.cos(errors[:, :, idx])
+            )
+        if self.is_diagonal:
+            return np.sum(errors**2 * self.Q, axis=(1, 2))
+        weighted = np.einsum("ktn,nm->ktm", errors, self.Q)
+        return np.sum(weighted * errors, axis=(1, 2))
+
+
+class AngleAwareTerminalCost(CostFunction):
+    """
+    터미널 비용 + heading angle wrapping.
+
+    Args:
+        Qf: (nx,) 또는 (nx, nx) 터미널 가중치
+        angle_indices: 각도 래핑할 state 인덱스 (기본: (2,) = θ)
+    """
+
+    def __init__(self, Qf: np.ndarray, angle_indices=(2,)):
+        self.Qf = Qf
+        self.is_diagonal = Qf.ndim == 1
+        self.angle_indices = angle_indices
+
+    def compute_cost(self, trajectories, controls, reference_trajectory):
+        errors = trajectories[:, -1, :] - reference_trajectory[-1, :]
+        for idx in self.angle_indices:
+            errors[:, idx] = np.arctan2(
+                np.sin(errors[:, idx]), np.cos(errors[:, idx])
+            )
+        if self.is_diagonal:
+            return np.sum(errors**2 * self.Qf, axis=1)
+        weighted = errors @ self.Qf
+        return np.sum(weighted * errors, axis=1)
+
+
 class CompositeMPPICost(CostFunction):
     """
     복합 비용 함수

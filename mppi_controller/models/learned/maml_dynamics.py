@@ -71,7 +71,8 @@ class MAMLDynamics(NeuralDynamics):
         if self._meta_weights is not None and self.model is not None:
             self.model.load_state_dict(self._meta_weights)
 
-    def adapt(self, states, controls, next_states, dt, restore=True):
+    def adapt(self, states, controls, next_states, dt, restore=True,
+              sample_weights=None, temporal_decay=None):
         """
         Few-shot 적응: 최근 데이터로 inner-loop gradient descent.
 
@@ -82,6 +83,9 @@ class MAMLDynamics(NeuralDynamics):
             dt: float 시간 간격
             restore: True → 메타 파라미터 복원 후 적응 (표준 MAML)
                      False → 현재 파라미터에서 계속 fine-tune (온라인 연속 학습)
+            sample_weights: (M,) 샘플별 가중치 (None이면 균등)
+            temporal_decay: float, 시간 감쇠 비율 (예: 0.99 → 최근 데이터 강조)
+                           None이면 사용 안함. sample_weights와 중첩 가능.
 
         Returns:
             float: 최종 loss 값
@@ -105,6 +109,22 @@ class MAMLDynamics(NeuralDynamics):
         inputs_t = self._prepare_inputs(states, controls)
         targets_t = self._prepare_targets(targets)
 
+        # 가중치 계산
+        M = states.shape[0]
+        weights = np.ones(M, dtype=np.float32)
+
+        if temporal_decay is not None:
+            # Exponential weighting: 최근 데이터에 높은 가중치
+            decay_weights = np.array([temporal_decay ** (M - 1 - i) for i in range(M)], dtype=np.float32)
+            weights *= decay_weights
+
+        if sample_weights is not None:
+            weights *= sample_weights.astype(np.float32)
+
+        # 정규화
+        weights /= weights.sum()
+        weights_t = torch.FloatTensor(weights).to(self.device)
+
         if restore or self._online_optimizer is None:
             if self.use_adam:
                 self._online_optimizer = torch.optim.Adam(
@@ -115,11 +135,18 @@ class MAMLDynamics(NeuralDynamics):
                     self.model.parameters(), lr=self.inner_lr
                 )
 
+        use_weighted = temporal_decay is not None or sample_weights is not None
+
         loss_val = 0.0
         for _ in range(self.inner_steps):
             self._online_optimizer.zero_grad()
             pred = self.model(inputs_t)
-            loss = F.mse_loss(pred, targets_t)
+            if use_weighted:
+                # Weighted MSE loss
+                per_sample_loss = ((pred - targets_t) ** 2).mean(dim=1)
+                loss = (per_sample_loss * weights_t).sum()
+            else:
+                loss = F.mse_loss(pred, targets_t)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self._online_optimizer.step()

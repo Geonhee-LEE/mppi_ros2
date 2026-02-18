@@ -1,32 +1,24 @@
 # MPPI ROS2 - Claude 개발 가이드
 
-## 📊 프로젝트 현황 (2026-02-07)
+## 📊 프로젝트 현황 (2026-02-18)
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│         Phase 1, 2, 3, 4 (M1, M2, M3, M3.5) 완료! ✓        │
+│     Phase 1~4 + Safety + GPU + MAML 완료! ✓                │
 ├────────────────────────────────────────────────────────────┤
 │  ✓ Phase 1: 기구학 모델 및 Vanilla MPPI                   │
-│    - Circle RMSE: 0.006m, Time: 4.96ms                    │
-│    - 커밋: ede08f8 (30 files, 4273 lines)                 │
-│                                                            │
 │  ✓ Phase 2: 동역학 모델 (마찰/관성)                       │
-│    - Circle RMSE: 0.160m, Time: 5.78ms                    │
-│    - 기구학 vs 동역학 비교 데모                           │
-│    - 커밋: 004139d (3 files, 759 lines)                   │
+│  ✓ Phase 3: MPPI 변형 9종 + 8 Safety-Critical Control     │
+│  ✓ Phase 4: 학습 모델 6종 (Neural/GP/Residual/Ensemble/   │
+│             MC-Dropout/MAML) + 온라인 학습                 │
+│  ✓ GPU 가속: RTX 5080 K=8192→8.1x speedup                │
+│  ✓ 로봇 모델: DiffDrive/Ackermann/Swerve (Kin+Dyn)       │
+│  ✓ MAML 메타 학습: Residual MAML, RMSE 0.074m            │
+│  ✓ 시뮬레이션: 10개 환경 시나리오                         │
 │                                                            │
-│  ✓ Phase 3: MPPI 변형 9종 (Tube/Log/Tsallis/...)          │
-│    - 전체 벤치마크: 9개 변형 비교                         │
-│    - SVG-MPPI: 0.005m (최고 정확도)                       │
-│    - 커밋: 여러 커밋 (M3 SOTA)                            │
-│                                                            │
-│  ✓ Phase 4: 학습 모델 고도화 (Neural/GP/Residual)         │
-│    - 3개 학습 모델 + 3개 학습 파이프라인                  │
-│    - 9개 Plot 갤러리 (MPPI 7개 + Learned 2개)             │
-│    - 문서화 1224 lines (2개 가이드)                       │
-│    - 커밋: 84b222f, 7cf7a99                               │
+│  394 tests (34 files), ~22,000+ lines                      │
 ├────────────────────────────────────────────────────────────┤
-│  → 다음: ROS2 통합 (M4) 또는 GPU 가속                     │
+│  → 다음: ROS2 통합 (M4) 또는 C++ 포팅                     │
 └────────────────────────────────────────────────────────────┘
 ```
 

@@ -924,17 +924,34 @@
 - [x] 실시간 live 비교 (perturbed/dynamic 모두 지원)
 - [x] 기존 `--world perturbed` (4-Way) 완전 하위 호환
 
+#### MAML 메타 학습 (2026-02-18) ✓
+
+- [x] MAMLDynamics: NeuralDynamics 상속, save/restore 메타 파라미터
+  * adapt(restore=True): 메타에서 재적응 (드리프트 방지)
+  * gradient clipping, Adam/SGD 선택, use_adam 파라미터
+- [x] MAMLTrainer: FOMAML 파이프라인
+  * 궤적 추종 학습 데이터 (50% 전진, 30% 곡선, 20% 랜덤)
+  * 1000 iter × 8 tasks/batch, support/query 100/100
+- [x] Residual MAML 아키텍처 (kinematic base + MAML residual)
+  * 2-phase: 기구학 warm-up → Residual MAML 제어
+  * 80 step마다 재적응, restore=True, 컨트롤러 reset 안 함
+- [x] 6-Way 비교 데모 (--world dynamic)
+  * MAML RMSE: 0.074m (5-seed avg 0.081m ± 0.007)
+  * Neural/Residual 오프라인 모델보다 우수
+- [x] 테스트: test_maml.py (13개)
+- [x] 문서: META_LEARNING.md + LEARNED_MODELS_GUIDE.md 업데이트
+
 #### 종합 통계
 
-**총 구현 코드**: ~21,000+ 라인
-**유닛 테스트**: 381개 passed (33 파일)
+**총 구현 코드**: ~22,000+ 라인
+**유닛 테스트**: 394개 passed (34 파일)
 **MPPI 변형**: 9개 (전부 완성 ✅)
 **모델 타입**: 5개 (DiffDrive Kinematic/Dynamic, Ackermann, Swerve, Learned)
-**학습 모델**: 5개 (Neural/GP/Residual/Ensemble/MC-Dropout ✅)
+**학습 모델**: 6개 (Neural/GP/Residual/Ensemble/MC-Dropout/MAML ✅)
 **안전 제어**: 8개 (CBF/C3BF/DPCBF/OptimalDecay/Shield/Gatekeeper/BackupCBF/MultiRobot ✅)
 **시뮬레이션 환경**: 10개 시나리오 ✅
-**데모**: Model Mismatch 4-Way(perturbed) + 5-Way(dynamic) 비교 ✅
-**문서**: README, SIMULATION_ENVIRONMENTS, SAFETY_CRITICAL_CONTROL, LEARNED_MODELS_GUIDE 등
+**데모**: Model Mismatch 4-Way(perturbed) + 6-Way(dynamic, MAML 포함) 비교 ✅
+**문서**: README, META_LEARNING, SIMULATION_ENVIRONMENTS, SAFETY_CRITICAL_CONTROL, LEARNED_MODELS_GUIDE 등
 
 ---
 

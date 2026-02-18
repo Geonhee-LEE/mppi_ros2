@@ -2,9 +2,9 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-319%20Passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-394%20Passing-brightgreen)](tests/)
 
-A comprehensive MPPI (Model Predictive Path Integral) control library featuring 9 SOTA variants, 8 safety-critical control methods, 5 robot model types, GPU acceleration, and learning-based dynamics.
+A comprehensive MPPI (Model Predictive Path Integral) control library featuring 9 SOTA variants, 8 safety-critical control methods, 5 robot model types, GPU acceleration, learning-based dynamics, and MAML meta-learning for real-time adaptation.
 
 ## Key Features
 
@@ -64,7 +64,8 @@ Enable GPU acceleration with just `device="cuda"`. No changes to existing CPU co
 
 ### Learning-Based Models
 
-- **5 model types**: Neural Network, Gaussian Process, Residual, Ensemble NN, MC-Dropout Bayesian NN
+- **6 model types**: Neural Network, Gaussian Process, Residual, Ensemble NN, MC-Dropout Bayesian NN, **MAML (Meta-Learning)**
+- **MAML meta-learning**: FOMAML-based few-shot adaptation — Residual MAML (kinematic + MAML residual) achieves 0.074m RMSE in dynamic worlds
 - **Uncertainty-aware cost**: GP/Ensemble std-proportional penalty
 - **Online learning**: Real-time model adaptation with checkpoint versioning and auto-rollback
 - **Model validation**: RMSE/MAE/R2/rollout error comparison framework
@@ -256,6 +257,18 @@ residual_model = ResidualDynamics(
     residual_fn=lambda s, u: neural_model.forward_dynamics(s, u) - kinematic_model.forward_dynamics(s, u)
 )
 
+# MAML Meta-Learning (few-shot real-time adaptation)
+from mppi_controller.models.learned.maml_dynamics import MAMLDynamics
+
+maml = MAMLDynamics(
+    state_dim=3, control_dim=2,
+    model_path="models/learned_models/dynamic_maml_meta_model.pth",
+    inner_lr=0.005, inner_steps=100,
+)
+maml.save_meta_weights()
+maml.adapt(states, controls, residual_targets, dt, restore=True)
+residual_model = ResidualDynamics(base_model=kinematic_model, learned_model=maml, use_residual=True)
+
 # Online learning (real-time model adaptation)
 from mppi_controller.learning.online_learner import OnlineLearner
 
@@ -307,7 +320,7 @@ Demonstrates the value of learned models when model mismatch exists between the 
 # Perturbed world (4-way: Kinematic / Neural / Residual / Oracle)
 python examples/comparison/model_mismatch_comparison_demo.py --all --trajectory circle --duration 20
 
-# Dynamic world (5-way: + Dynamic 5D adapter)
+# Dynamic world (6-way: + Dynamic 5D adapter + MAML meta-learning)
 # Uses DifferentialDriveDynamic (5D, inertia+friction) as "real world"
 python examples/comparison/model_mismatch_comparison_demo.py --all --world dynamic --trajectory circle --duration 20
 
@@ -315,13 +328,14 @@ python examples/comparison/model_mismatch_comparison_demo.py --all --world dynam
 python examples/comparison/model_mismatch_comparison_demo.py --live --world dynamic --trajectory circle
 ```
 
-| # | Controller | State | Description |
-|---|-----------|-------|-------------|
-| 1 | Kinematic | 3D | No knowledge of friction/inertia |
-| 2 | Neural | 3D | End-to-end learned from data |
-| 3 | Residual | 3D | Physics + NN correction (hybrid) |
-| 4 | Dynamic | 5D | Correct structure, wrong parameters (c_v=0.1 vs 0.5) |
-| 5 | Oracle | 5D | Exact parameters (theoretical upper bound) |
+| # | Controller | State | Description | RMSE |
+|---|-----------|-------|-------------|------|
+| 1 | Oracle | 5D | Exact parameters (theoretical upper bound) | ~0.023m |
+| 2 | Dynamic | 5D | Correct structure, wrong parameters (c_v=0.1 vs 0.5) | ~0.025m |
+| 3 | Kinematic | 3D | No knowledge of friction/inertia | ~0.029m |
+| 4 | **MAML** | **3D** | **Residual MAML: kinematic + meta-learned correction** | **~0.074m** |
+| 5 | Residual | 3D | Physics + NN correction (offline hybrid) | ~0.120m |
+| 6 | Neural | 3D | End-to-end learned from data (offline) | ~0.287m |
 
 ### MPPI Variant Benchmarks
 
@@ -370,6 +384,10 @@ python examples/learned/gp_vs_neural_comparison_demo.py --all
 
 # Online learning demo
 python examples/learned/online_learning_demo.py --duration 60.0 --plot
+
+# MAML 6-Way comparison (meta-train + evaluate)
+python examples/comparison/model_mismatch_comparison_demo.py \
+    --all --world dynamic --trajectory circle --duration 20
 ```
 
 ### Simulation Environments (10 Scenarios)
@@ -571,7 +589,7 @@ PYTHONPATH=. python examples/simulation_environments/scenarios/dynamic_bouncing.
 
 ![Model Mismatch Dynamic](plots/model_mismatch_comparison_circle_dynamic.png)
 
-**5-way comparison** (5D dynamic world with inertia+friction): Oracle(0.024m) < Dynamic(0.026m) < Kinematic(0.031m). Structural knowledge (5D adapter) outperforms pure learning.
+**6-way comparison** (5D dynamic world with inertia+friction): Oracle(0.023m) < Dynamic(0.025m) < Kinematic(0.029m) < **MAML(0.074m)** < Residual(0.120m) < Neural(0.287m). MAML's Residual architecture (kinematic + meta-learned correction) beats offline-trained models through real-time few-shot adaptation.
 
 ---
 
@@ -584,7 +602,7 @@ mppi_ros2/
 │   │   ├── base_model.py           # Abstract base class
 │   │   ├── kinematic/              # Kinematic models (DiffDrive, Ackermann, Swerve)
 │   │   ├── dynamic/                # Dynamic models (friction, inertia)
-│   │   └── learned/                # Learning models (NN, GP, Residual, Ensemble, MC-Dropout)
+│   │   └── learned/                # Learning models (NN, GP, Residual, Ensemble, MC-Dropout, MAML)
 │   │
 │   ├── controllers/mppi/           # MPPI controllers
 │   │   ├── base_mppi.py            # Vanilla MPPI (+ GPU path)
@@ -618,6 +636,7 @@ mppi_ros2/
 │   │   ├── neural_network_trainer.py  # NN trainer
 │   │   ├── gaussian_process_trainer.py  # GP trainer
 │   │   ├── ensemble_trainer.py     # Ensemble trainer
+│   │   ├── maml_trainer.py         # MAML meta-learning trainer
 │   │   ├── online_learner.py       # Online learning
 │   │   └── model_validator.py      # Model validation
 │   │
@@ -628,7 +647,7 @@ mppi_ros2/
 │   ├── simulation/                 # Simulation tools
 │   └── utils/                      # Utilities
 │
-├── tests/                          # Unit tests (381 tests, 33 files)
+├── tests/                          # Unit tests (394 tests, 34 files)
 ├── examples/                       # Demo scripts
 │   └── simulation_environments/    # 10 simulation scenarios
 │       ├── common/                 # Shared infrastructure (ABC, obstacles, visualizer)
@@ -650,7 +669,7 @@ PYTHONPATH=. python -m pytest tests/test_safety_s3.py -v -o "addopts="
 PYTHONPATH=. python -m pytest tests/test_robot_models.py -v -o "addopts="
 ```
 
-**Test status**: 381 tests passing across 33 test files
+**Test status**: 394 tests passing across 34 test files
 
 ## ROS2 Integration
 
@@ -735,6 +754,7 @@ ros2 launch mppi_ros2 mppi_sim.launch.py model_type:=dynamic
 - [Implementation Status](docs/mppi/IMPLEMENTATION_STATUS.md)
 - [Safety-Critical Control Guide](docs/safety/SAFETY_CRITICAL_CONTROL.md)
 - [Learned Models Guide](docs/learned_models/LEARNED_MODELS_GUIDE.md)
+- [Meta-Learning (MAML) Guide](docs/learned_models/META_LEARNING.md)
 - [Online Learning Guide](docs/learned_models/ONLINE_LEARNING.md)
 - [Simulation Environments Guide](docs/SIMULATION_ENVIRONMENTS.md)
 - [CLAUDE Development Guide](CLAUDE.md)
@@ -754,6 +774,10 @@ ros2 launch mppi_ros2 mppi_sim.launch.py model_type:=dynamic
 - Bhardwaj et al. (2024) - "Spline-MPPI"
 - Kondo et al. (2024) - "SVG-MPPI"
 
+### Meta-Learning
+- Finn et al. (2017) - "Model-Agnostic Meta-Learning for Fast Adaptation" (MAML)
+- Nichol et al. (2018) - "On First-Order Meta-Learning Algorithms" (FOMAML)
+
 ### Safety-Critical Control
 - Thirugnanam et al. (2024) - "Safety-Critical Control with Collision Cone CBFs"
 - Zeng et al. (2021) - "Safety-Critical MPC with Discrete-Time CBF"
@@ -768,9 +792,10 @@ ros2 launch mppi_ros2 mppi_sim.launch.py model_type:=dynamic
 - [x] 5 robot model types (Kinematic/Dynamic/Learned x DiffDrive/Ackermann/Swerve)
 - [x] 8 safety-critical control methods + MPCC
 - [x] GPU acceleration (PyTorch CUDA, 8.1x speedup)
-- [x] Learning pipeline (NN/GP/Residual/Ensemble/MC-Dropout)
+- [x] Learning pipeline (NN/GP/Residual/Ensemble/MC-Dropout/MAML)
+- [x] MAML meta-learning with Residual MAML architecture
 - [x] Online learning with checkpoint versioning
-- [x] 319 unit tests (26 files)
+- [x] 394 unit tests (34 files)
 - [x] 10 simulation environments (static/dynamic/multi-robot/parking/racing/corridor)
 
 ### In Progress

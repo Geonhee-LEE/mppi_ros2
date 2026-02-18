@@ -914,15 +914,26 @@
 - [x] 배치 실행: 10P/0F, ~218s
 - [x] 문서: docs/SIMULATION_ENVIRONMENTS.md
 
+#### Model Mismatch 동적 세계 통합 (2026-02-18) ✓
+
+- [x] DynamicWorld: 5D DifferentialDriveDynamic 래퍼 (PD control + 프로세스 노이즈)
+- [x] DynamicKinematicAdapter: 5D MPPI 내부 모델 (PD + friction forward_dynamics)
+- [x] `--world dynamic` CLI: 5-Way 비교 (Kinematic/Neural/Residual/Dynamic/Oracle)
+- [x] 5D MPPI 파라미터, 비용 함수, make_5d_reference 유틸리티
+- [x] run_with_dynamic_world 시뮬 루프 (3D/5D 컨트롤러 혼합)
+- [x] 실시간 live 비교 (perturbed/dynamic 모두 지원)
+- [x] 기존 `--world perturbed` (4-Way) 완전 하위 호환
+
 #### 종합 통계
 
-**총 구현 코드**: ~20,000+ 라인
-**유닛 테스트**: 313개 passed (26 파일)
+**총 구현 코드**: ~21,000+ 라인
+**유닛 테스트**: 381개 passed (33 파일)
 **MPPI 변형**: 9개 (전부 완성 ✅)
 **모델 타입**: 5개 (DiffDrive Kinematic/Dynamic, Ackermann, Swerve, Learned)
 **학습 모델**: 5개 (Neural/GP/Residual/Ensemble/MC-Dropout ✅)
 **안전 제어**: 8개 (CBF/C3BF/DPCBF/OptimalDecay/Shield/Gatekeeper/BackupCBF/MultiRobot ✅)
 **시뮬레이션 환경**: 10개 시나리오 ✅
+**데모**: Model Mismatch 4-Way(perturbed) + 5-Way(dynamic) 비교 ✅
 **문서**: README, SIMULATION_ENVIRONMENTS, SAFETY_CRITICAL_CONTROL, LEARNED_MODELS_GUIDE 등
 
 ---

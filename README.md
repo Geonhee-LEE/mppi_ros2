@@ -299,6 +299,30 @@ python examples/comparison/mppi_ackermann_demo.py
 python examples/comparison/mppi_swerve_drive_demo.py
 ```
 
+### Model Mismatch Comparison
+
+Demonstrates the value of learned models when model mismatch exists between the controller's internal model and reality.
+
+```bash
+# Perturbed world (4-way: Kinematic / Neural / Residual / Oracle)
+python examples/comparison/model_mismatch_comparison_demo.py --all --trajectory circle --duration 20
+
+# Dynamic world (5-way: + Dynamic 5D adapter)
+# Uses DifferentialDriveDynamic (5D, inertia+friction) as "real world"
+python examples/comparison/model_mismatch_comparison_demo.py --all --world dynamic --trajectory circle --duration 20
+
+# Live animation
+python examples/comparison/model_mismatch_comparison_demo.py --live --world dynamic --trajectory circle
+```
+
+| # | Controller | State | Description |
+|---|-----------|-------|-------------|
+| 1 | Kinematic | 3D | No knowledge of friction/inertia |
+| 2 | Neural | 3D | End-to-end learned from data |
+| 3 | Residual | 3D | Physics + NN correction (hybrid) |
+| 4 | Dynamic | 5D | Correct structure, wrong parameters (c_v=0.1 vs 0.5) |
+| 5 | Oracle | 5D | Exact parameters (theoretical upper bound) |
+
 ### MPPI Variant Benchmarks
 
 ```bash
@@ -535,6 +559,22 @@ PYTHONPATH=. python examples/simulation_environments/scenarios/dynamic_bouncing.
 
 ---
 
+#### Model Mismatch Comparison (Perturbed World)
+
+![Model Mismatch Perturbed](plots/model_mismatch_comparison_circle.png)
+
+**4-way comparison** (perturbed kinematic world): Oracle(0.057m) < Residual(0.060m) < Neural(0.067m) << Kinematic(0.153m). Residual (physics+NN) nearly matches oracle.
+
+---
+
+#### Model Mismatch Comparison (Dynamic World)
+
+![Model Mismatch Dynamic](plots/model_mismatch_comparison_circle_dynamic.png)
+
+**5-way comparison** (5D dynamic world with inertia+friction): Oracle(0.024m) < Dynamic(0.026m) < Kinematic(0.031m). Structural knowledge (5D adapter) outperforms pure learning.
+
+---
+
 ## Project Structure
 
 ```
@@ -588,7 +628,7 @@ mppi_ros2/
 │   ├── simulation/                 # Simulation tools
 │   └── utils/                      # Utilities
 │
-├── tests/                          # Unit tests (319 tests, 26 files)
+├── tests/                          # Unit tests (381 tests, 33 files)
 ├── examples/                       # Demo scripts
 │   └── simulation_environments/    # 10 simulation scenarios
 │       ├── common/                 # Shared infrastructure (ABC, obstacles, visualizer)
@@ -610,7 +650,7 @@ PYTHONPATH=. python -m pytest tests/test_safety_s3.py -v -o "addopts="
 PYTHONPATH=. python -m pytest tests/test_robot_models.py -v -o "addopts="
 ```
 
-**Test status**: 319 tests passing across 26 test files
+**Test status**: 381 tests passing across 33 test files
 
 ## ROS2 Integration
 

@@ -1374,19 +1374,36 @@ def run_live_comparison(args):
         is_5d_map["Dynamic"] = True
         params_map["Dynamic"] = params_5d
 
-        # MAML (3D, few-shot 적응)
+        # MAML (3D, Residual MAML 아키텍처 — 2-Phase)
         maml_path = os.path.join(MODEL_DIR, DYNAMIC_MAML_MODEL_FILE)
         maml_model_live = None
+        maml_residual_controller = None
+        maml_kin_controller = None
         if not os.path.exists(maml_path):
             print(f"\n  MAML meta model not found — auto-running meta-train...")
             meta_train_maml(args)
         if os.path.exists(maml_path):
             maml_model_live = MAMLDynamics(
                 state_dim=3, control_dim=2,
-                model_path=maml_path, inner_lr=0.01, inner_steps=5,
+                model_path=maml_path, inner_lr=0.005, inner_steps=100,
             )
             maml_model_live.save_meta_weights()
-            controllers["MAML"] = MPPIController(maml_model_live, params_3d, cost_function=cost_fn_3d)
+            # Phase 1: 기구학 컨트롤러 (warmup)
+            maml_kin_controller = MPPIController(
+                DifferentialDriveKinematic(v_max=1.0, omega_max=1.0),
+                params_3d, cost_function=cost_fn_3d,
+            )
+            # Phase 2: ResidualDynamics(kinematic + MAML)
+            maml_residual_model = ResidualDynamics(
+                base_model=DifferentialDriveKinematic(v_max=1.0, omega_max=1.0),
+                learned_model=maml_model_live,
+                use_residual=True,
+            )
+            maml_residual_controller = MPPIController(
+                maml_residual_model, params_3d, cost_function=cost_fn_3d,
+            )
+            # Phase 1 시작: 기구학 컨트롤러로 초기화
+            controllers["MAML"] = maml_kin_controller
             is_5d_map["MAML"] = False
             params_map["MAML"] = params_3d
 
@@ -1428,10 +1445,14 @@ def run_live_comparison(args):
     for ctrl in controllers.values():
         ctrl.reset()
 
-    # MAML adaptation buffers
-    maml_buffer_states = deque(maxlen=50)
-    maml_buffer_controls = deque(maxlen=50)
-    maml_buffer_next = deque(maxlen=50)
+    # MAML adaptation buffers + phase tracking
+    maml_buffer_states = deque(maxlen=200)
+    maml_buffer_controls = deque(maxlen=200)
+    maml_buffer_next = deque(maxlen=200)
+    maml_warmup_steps = 40
+    maml_adapt_interval = 80
+    maml_adapted = [False]  # mutable for closure
+    maml_base_model = DifferentialDriveKinematic(v_max=1.0, omega_max=1.0)
 
     data = {
         n: {"xy": [], "times": [], "errors": [], "controls_v": [], "solve_times": []}
@@ -1518,14 +1539,33 @@ def run_live_comparison(args):
             ref_3d = generate_reference_trajectory(trajectory_fn, t_current, p.N, dt)
             ref = make_5d_reference(ref_3d) if is_5d_map[name] else ref_3d
 
-            # MAML: 적응 버퍼 충분하면 제어 전에 adapt
+            # MAML: 2-Phase 적응 (Residual MAML 아키텍처)
             if name == "MAML" and maml_model_live is not None:
-                if frame > 0 and frame % 10 == 0 and len(maml_buffer_states) >= 20:
-                    maml_model_live.adapt(
-                        np.array(maml_buffer_states),
-                        np.array(maml_buffer_controls),
-                        np.array(maml_buffer_next), dt
-                    )
+                # Phase 1→2 전환: warmup 후 잔차 학습 + 컨트롤러 교체
+                if not maml_adapted[0] and frame >= maml_warmup_steps and len(maml_buffer_states) >= maml_warmup_steps:
+                    buf_s = np.array(maml_buffer_states)
+                    buf_c = np.array(maml_buffer_controls)
+                    buf_n = np.array(maml_buffer_next)
+                    kin_dots = np.array([
+                        maml_base_model.forward_dynamics(s, c) for s, c in zip(buf_s, buf_c)
+                    ])
+                    kin_next = buf_s + kin_dots * dt
+                    residual_target = buf_s + (buf_n - kin_next)
+                    maml_model_live.adapt(buf_s, buf_c, residual_target, dt, restore=True)
+                    controllers["MAML"] = maml_residual_controller
+                    maml_residual_controller.reset()
+                    maml_adapted[0] = True
+                # Phase 2: 주기적 재적응
+                elif maml_adapted[0] and frame % maml_adapt_interval == 0:
+                    buf_s = np.array(maml_buffer_states)
+                    buf_c = np.array(maml_buffer_controls)
+                    buf_n = np.array(maml_buffer_next)
+                    kin_dots = np.array([
+                        maml_base_model.forward_dynamics(s, c) for s, c in zip(buf_s, buf_c)
+                    ])
+                    kin_next = buf_s + kin_dots * dt
+                    residual_target = buf_s + (buf_n - kin_next)
+                    maml_model_live.adapt(buf_s, buf_c, residual_target, dt, restore=True)
 
             t_start = time.time()
             control, info = controllers[name].compute_control(states[name], ref)

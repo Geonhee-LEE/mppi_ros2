@@ -122,6 +122,7 @@ class MAMLTrainer:
         """
         # Lazy import to avoid circular dependency
         from examples.comparison.model_mismatch_comparison_demo import DynamicWorld
+        from mppi_controller.models.kinematic.dynamic_kinematic_adapter import DynamicKinematicAdapter
 
         world = DynamicWorld(
             c_v=task_params["c_v"],
@@ -180,6 +181,79 @@ class MAMLTrainer:
                 ])
                 world.reset(state_3d)
                 obs = state_3d.copy()
+
+        return np.array(states), np.array(controls), np.array(next_states)
+
+    def _generate_task_data_5d(
+        self, task_params: Dict, n_samples: int
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        DynamicWorld에서 5D 데이터 생성 — world.get_full_state() 사용.
+
+        5D state = [x, y, θ, v, ω]로 MAML이 속도/각속도를 관측하여
+        관성/마찰 보정을 학습할 수 있도록 한다.
+
+        Returns:
+            states: (n_samples, 5)
+            controls: (n_samples, 2)
+            next_states: (n_samples, 5)
+        """
+        from examples.comparison.model_mismatch_comparison_demo import DynamicWorld
+
+        world = DynamicWorld(
+            c_v=task_params["c_v"],
+            c_omega=task_params["c_omega"],
+            k_v=task_params["k_v"],
+            k_omega=task_params["k_omega"],
+            process_noise_std=np.zeros(5),
+        )
+
+        states = []
+        controls = []
+        next_states = []
+
+        dt = 0.05
+        state_3d = np.array([
+            np.random.uniform(-3, 3),
+            np.random.uniform(-3, 3),
+            np.random.uniform(-np.pi, np.pi),
+        ])
+        world.reset(state_3d)
+
+        for _ in range(n_samples):
+            r = np.random.random()
+            if r < 0.5:
+                control = np.array([
+                    np.random.uniform(0.2, 1.0),
+                    np.random.uniform(-0.3, 0.3),
+                ])
+            elif r < 0.8:
+                control = np.array([
+                    np.random.uniform(0.1, 0.8),
+                    np.random.uniform(-1.0, 1.0),
+                ])
+            else:
+                control = np.array([
+                    np.random.uniform(-1.0, 1.0),
+                    np.random.uniform(-1.0, 1.0),
+                ])
+
+            state_5d = world.get_full_state()
+            states.append(state_5d.copy())
+            controls.append(control.copy())
+
+            world.step(control, dt, add_noise=False)
+            next_state_5d = world.get_full_state()
+            next_states.append(next_state_5d.copy())
+
+            # 주기적 리셋
+            if np.random.random() < 0.05:
+                state_3d = np.array([
+                    np.random.uniform(-3, 3),
+                    np.random.uniform(-3, 3),
+                    np.random.uniform(-np.pi, np.pi),
+                ])
+                world.reset(state_3d)
 
         return np.array(states), np.array(controls), np.array(next_states)
 
@@ -339,10 +413,12 @@ class MAMLTrainer:
             print("    Computing normalization stats...")
 
         n_total = self.support_size + self.query_size
+        gen_fn = self._generate_task_data_5d if self.state_dim == 5 else self._generate_task_data
+
         pre_data = []
         for _ in range(self.task_batch_size * 2):
             task = self._sample_task()
-            data = self._generate_task_data(task, n_total)
+            data = gen_fn(task, n_total)
             pre_data.append(data)
 
         self.norm_stats = self._compute_norm_stats(pre_data)
@@ -358,7 +434,7 @@ class MAMLTrainer:
 
             for _ in range(self.task_batch_size):
                 task = self._sample_task()
-                states, controls, next_states = self._generate_task_data(
+                states, controls, next_states = gen_fn(
                     task, n_total
                 )
 

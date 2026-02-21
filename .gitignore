@@ -115,3 +115,8 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Trained model files
+models/
+examples/comparison/models/
+*.pth

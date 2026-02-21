@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-394%20Passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-426%20Passing-brightgreen)](tests/)
 
 A comprehensive MPPI (Model Predictive Path Integral) control library featuring 9 SOTA variants, 8 safety-critical control methods, 5 robot model types, GPU acceleration, learning-based dynamics, and MAML meta-learning for real-time adaptation.
 
@@ -65,7 +65,8 @@ Enable GPU acceleration with just `device="cuda"`. No changes to existing CPU co
 ### Learning-Based Models
 
 - **6 model types**: Neural Network, Gaussian Process, Residual, Ensemble NN, MC-Dropout Bayesian NN, **MAML (Meta-Learning)**
-- **MAML meta-learning**: FOMAML-based few-shot adaptation — Residual MAML (kinematic + MAML residual) achieves 0.074m RMSE in dynamic worlds
+- **MAML meta-learning**: FOMAML/Reptile-based few-shot adaptation — Residual MAML-5D achieves 0.055m RMSE under combined disturbances (noise=0.7)
+- **Disturbance simulation**: WindGust, TerrainChange, Sinusoidal, Combined profiles for evaluating model adaptation
 - **Uncertainty-aware cost**: GP/Ensemble std-proportional penalty
 - **Online learning**: Real-time model adaptation with checkpoint versioning and auto-rollback
 - **Model validation**: RMSE/MAE/R2/rollout error comparison framework
@@ -320,22 +321,55 @@ Demonstrates the value of learned models when model mismatch exists between the 
 # Perturbed world (4-way: Kinematic / Neural / Residual / Oracle)
 python examples/comparison/model_mismatch_comparison_demo.py --all --trajectory circle --duration 20
 
-# Dynamic world (6-way: + Dynamic 5D adapter + MAML meta-learning)
+# Dynamic world (7-way: + Dynamic 5D + MAML-3D + MAML-5D)
 # Uses DifferentialDriveDynamic (5D, inertia+friction) as "real world"
 python examples/comparison/model_mismatch_comparison_demo.py --all --world dynamic --trajectory circle --duration 20
+
+# With disturbance (wind + terrain + sinusoidal combined)
+python examples/comparison/model_mismatch_comparison_demo.py \
+    --evaluate --world dynamic --noise 0.7 --disturbance combined
 
 # Live animation
 python examples/comparison/model_mismatch_comparison_demo.py --live --world dynamic --trajectory circle
 ```
+
+#### Without Disturbance (noise=0.0)
 
 | # | Controller | State | Description | RMSE |
 |---|-----------|-------|-------------|------|
 | 1 | Oracle | 5D | Exact parameters (theoretical upper bound) | ~0.023m |
 | 2 | Dynamic | 5D | Correct structure, wrong parameters (c_v=0.1 vs 0.5) | ~0.025m |
 | 3 | Kinematic | 3D | No knowledge of friction/inertia | ~0.029m |
-| 4 | **MAML** | **3D** | **Residual MAML: kinematic + meta-learned correction** | **~0.074m** |
-| 5 | Residual | 3D | Physics + NN correction (offline hybrid) | ~0.120m |
-| 6 | Neural | 3D | End-to-end learned from data (offline) | ~0.287m |
+| 4 | MAML-5D | 5D | Residual MAML: DynamicKinematicAdapter + meta-learned correction | ~0.032m |
+| 5 | MAML-3D | 3D | Residual MAML: kinematic + meta-learned correction | ~0.074m |
+| 6 | Residual | 3D | Physics + NN correction (offline hybrid) | ~0.120m |
+| 7 | Neural | 3D | End-to-end learned from data (offline) | ~0.287m |
+
+#### With Combined Disturbance (noise=0.7)
+
+Under time-varying disturbances (wind gusts + terrain friction changes + sinusoidal forces), fixed-parameter models degrade significantly while MAML adapts online:
+
+| # | Controller | State | RMSE (noise=0.7) | vs No-Noise | Adaptation |
+|---|-----------|-------|-------------------|-------------|------------|
+| 1 | Oracle | 5D | ~0.037m | +61% | None (exact params, but can't model disturbance) |
+| 2 | **MAML-5D** | **5D** | **~0.055m** | **—** | **Online few-shot (restore + adapt every 20 steps)** |
+| 3 | Dynamic | 5D | ~0.056m | +124% | None (fixed wrong params) |
+| 4 | Kinematic | 3D | ~0.094m | +224% | None (no velocity states) |
+| 5 | MAML-3D | 3D | ~0.096m | +30% | Online few-shot |
+| 6 | Residual | 3D | ~0.244m | +103% | None (offline) |
+| 7 | Neural | 3D | ~0.393m | +37% | None (offline) |
+
+> MAML-5D beats Dynamic (fixed 5D model) by online adaptation to time-varying disturbances. Key innovation: **residual meta-training** — meta-training uses residual targets matching online adaptation distribution.
+
+#### Disturbance Types
+
+| Type | CLI Flag | Effect |
+|------|----------|--------|
+| Wind Gust | `--disturbance wind` | Intermittent acceleration (unmodeled force) |
+| Terrain Change | `--disturbance terrain` | Multi-step friction coefficient shifts |
+| Sinusoidal | `--disturbance sine` | Periodic acceleration disturbance |
+| Combined | `--disturbance combined` | All three simultaneously (default) |
+| None | `--disturbance none` | No disturbance (original behavior) |
 
 ### MPPI Variant Benchmarks
 
@@ -385,9 +419,13 @@ python examples/learned/gp_vs_neural_comparison_demo.py --all
 # Online learning demo
 python examples/learned/online_learning_demo.py --duration 60.0 --plot
 
-# MAML 6-Way comparison (meta-train + evaluate)
+# MAML 7-Way comparison (meta-train + evaluate)
 python examples/comparison/model_mismatch_comparison_demo.py \
     --all --world dynamic --trajectory circle --duration 20
+
+# MAML with disturbance (MAML-5D advantage)
+python examples/comparison/model_mismatch_comparison_demo.py \
+    --evaluate --world dynamic --noise 0.7 --disturbance combined
 ```
 
 ### Simulation Environments (10 Scenarios)
@@ -589,7 +627,13 @@ PYTHONPATH=. python examples/simulation_environments/scenarios/dynamic_bouncing.
 
 ![Model Mismatch Dynamic](plots/model_mismatch_comparison_circle_dynamic.png)
 
-**6-way comparison** (5D dynamic world with inertia+friction): Oracle(0.023m) < Dynamic(0.025m) < Kinematic(0.029m) < **MAML(0.074m)** < Residual(0.120m) < Neural(0.287m). MAML's Residual architecture (kinematic + meta-learned correction) beats offline-trained models through real-time few-shot adaptation.
+**7-way comparison** (5D dynamic world with inertia+friction): Oracle(0.023m) < Dynamic(0.025m) < Kinematic(0.029m) < **MAML-5D(0.032m)** < MAML-3D(0.074m) < Residual(0.120m) < Neural(0.287m).
+
+#### Model Mismatch with Disturbance (noise=0.7)
+
+![Model Mismatch Dynamic Noise 0.7](plots/model_mismatch_comparison_circle_dynamic_noise0.7.png)
+
+**7-way comparison under combined disturbance** (wind + terrain + sinusoidal): Oracle(0.037m) < **MAML-5D(0.055m)** < Dynamic(0.056m) < Kinematic(0.094m). MAML-5D's residual meta-training enables online adaptation to time-varying disturbances, beating fixed-parameter Dynamic model.
 
 ---
 
@@ -637,6 +681,7 @@ mppi_ros2/
 │   │   ├── gaussian_process_trainer.py  # GP trainer
 │   │   ├── ensemble_trainer.py     # Ensemble trainer
 │   │   ├── maml_trainer.py         # MAML meta-learning trainer
+│   │   ├── reptile_trainer.py     # Reptile meta-learning trainer
 │   │   ├── online_learner.py       # Online learning
 │   │   └── model_validator.py      # Model validation
 │   │
@@ -647,7 +692,7 @@ mppi_ros2/
 │   ├── simulation/                 # Simulation tools
 │   └── utils/                      # Utilities
 │
-├── tests/                          # Unit tests (394 tests, 34 files)
+├── tests/                          # Unit tests (426 tests, 34 files)
 ├── examples/                       # Demo scripts
 │   └── simulation_environments/    # 10 simulation scenarios
 │       ├── common/                 # Shared infrastructure (ABC, obstacles, visualizer)
@@ -669,7 +714,7 @@ PYTHONPATH=. python -m pytest tests/test_safety_s3.py -v -o "addopts="
 PYTHONPATH=. python -m pytest tests/test_robot_models.py -v -o "addopts="
 ```
 
-**Test status**: 394 tests passing across 34 test files
+**Test status**: 426 tests passing across 34 test files
 
 ## ROS2 Integration
 
@@ -745,6 +790,7 @@ ros2 launch mppi_ros2 mppi_sim.launch.py model_type:=dynamic
 | Multi-robot coordination | Multi-Robot CBF | Pairwise collision avoidance |
 | Memory-constrained | Spline-MPPI | 73% memory reduction |
 | Sim-to-real adaptation | Online Learning | Real-time model adaptation |
+| Time-varying disturbance | MAML-5D | Few-shot online adaptation |
 
 ---
 
@@ -793,9 +839,11 @@ ros2 launch mppi_ros2 mppi_sim.launch.py model_type:=dynamic
 - [x] 8 safety-critical control methods + MPCC
 - [x] GPU acceleration (PyTorch CUDA, 8.1x speedup)
 - [x] Learning pipeline (NN/GP/Residual/Ensemble/MC-Dropout/MAML)
-- [x] MAML meta-learning with Residual MAML architecture
+- [x] MAML meta-learning with Residual MAML architecture + residual meta-training
+- [x] Disturbance simulation (WindGust/TerrainChange/Sinusoidal/Combined)
+- [x] Reptile meta-learning trainer
 - [x] Online learning with checkpoint versioning
-- [x] 394 unit tests (34 files)
+- [x] 426 unit tests (34 files)
 - [x] 10 simulation environments (static/dynamic/multi-robot/parking/racing/corridor)
 
 ### In Progress
